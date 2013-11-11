@@ -1,0 +1,20 @@
+name: Organic groups UI
+type: module
+description: "Organic groups UI."
+package: "Organic groups"
+dependencies:
+ - og
+# - views_bulk_operations
+version: VERSION
+core: 8.x
+files:
+ - og_ui.test
+configure: admin/config/group
+
+# Views handlers
+#files[] = includes/views/handlers/og_ui_handler_area_og_membership_overview.inc
+
+# Migrate
+#files[] = includes/migrate/7000/add_field.inc
+#files[] = includes/migrate/7000/populate_field.inc
+#files[] = includes/migrate/7000/set_roles.inc

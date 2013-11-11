@@ -1,0 +1,4 @@
+group_manager_full_access: TRUE
+node_access_strict: TRUE
+use_queue: FALSE
+orphans_delete: FALSE

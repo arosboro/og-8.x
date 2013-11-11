@@ -1,0 +1,258 @@
+<?php
+
+/**
+ * @file
+ * Organic groups UI.
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function og_ui_menu() {
+  $items = array();
+  /*
+  $items['group/%/%/subscribe'] = array(
+    'type' => MENU_CALLBACK,
+    'file' => 'og_ui.pages.inc',
+    'page callback' => 'og_ui_subscribe',
+    'page arguments' => array(1, 2),
+    // Function will take care of permissions, as we want to show "you are
+    // already a member of the group" to group members, however it is not
+    // possible to give authenticated group members the "subscribe" permissions.
+    'access callback' => 'user_is_logged_in',
+
+    // We don't add the group name, as it might be private.
+    'title' => 'Join group'
+  );
+
+  $items['group/%/%/unsubscribe'] = array(
+    'type' => MENU_CALLBACK,
+    'file' => 'og_ui.pages.inc',
+    'page callback' => 'og_ui_unsubscribe',
+    'page arguments' => array(1, 2),
+    'access callback' => 'og_ui_user_access_group',
+    'access arguments' => array('unsubscribe', 1, 2),
+    'title' => 'Leave group',
+  );
+
+  $items['group/%/%/admin/people/add-user'] = array(
+    'page callback' => 'drupal_get_form',
+    'title' => 'Add members',
+    'page arguments' => array('og_ui_add_users', 1, 2),
+    'type' => MENU_LOCAL_TASK,
+    'file' => 'og_ui.admin.inc',
+    'weight' => 5,
+    'access callback' => 'og_ui_user_access_group',
+    'access arguments' => array('add user', 1, 2),
+  );
+
+  // User listing pages.
+  $items['group/%/%/admin/people'] = array(
+    'title callback' => 'og_ui_menu_title_callback',
+    'title arguments' => array('People in group @group', 1, 2),
+    'description' => 'Find and manage group members.',
+    'page callback' => 'og_ui_admin_account',
+    'page arguments' => array(1, 2),
+    'access callback' => 'og_ui_user_access_group',
+    'access arguments' => array('manage members', 1, 2),
+    'weight' => -4,
+    'file' => 'og_ui.admin.inc',
+  );
+
+  // User listing pages.
+  $items['group/%/%/admin/people/edit-membership/%og_membership'] = array(
+    'title callback' => 'og_ui_menu_title_callback',
+    'title arguments' => array('Edit membership in group @group', 1, 2),
+    'type' => MENU_CALLBACK,
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('og_ui_edit_membership', 1, 2, 6),
+    'access callback' => 'og_ui_user_access_group',
+    'access arguments' => array('manage members', 1, 2),
+    'file' => 'og_ui.admin.inc',
+  );
+
+  // Permission administration pages.
+  $items['group/%/%/admin/roles'] = array(
+    'title callback' => 'og_ui_menu_title_callback',
+    'title arguments' => array('Roles for group @group', 1, 2),
+    'description' => 'List, edit, or add user roles.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('og_ui_admin_new_role', 1, 2),
+    'access callback' => 'og_ui_user_access_group',
+    'access arguments' => array('manage roles', 1, 2),
+    'file' => 'og_ui.admin.inc',
+    'weight' => -9,
+  );
+
+  // Node specific role edit
+  // group/[1: Group type]/[2: Group ID]/admin/role/[5: Role ID]/edit
+  $items['group/%/%/admin/role/%/edit'] = array(
+    'title' => 'Edit role',
+    'description' => 'List, edit, or add user roles.',
+    'page callback' => 'drupal_get_form',
+    // Passing empty bundle name to og_ui_admin_roles. The bundle will be
+    // loaded from the role.
+    'page arguments' => array('og_ui_admin_roles', 1, 2, '', 5),
+    'access callback' => 'og_ui_access_entity_role',
+    // Require administer group permission to edit and delete roles.
+    'access arguments' => array('manage roles', 1, 2, 5),
+    'file' => 'og_ui.admin.inc',
+    'weight' => -9,
+  );
+
+  $items['group/%/%/admin/permissions'] = array(
+    'title callback' => 'og_ui_menu_title_callback',
+    'title arguments' => array('Permissions for group @group', 1, 2),
+    'description' => 'Determine access to features by selecting permissions for roles.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('og_ui_admin_permissions', 1, 2),
+    'access callback' => 'og_ui_user_access_group',
+    'access arguments' => array('manage permissions', 1, 2),
+    'file' => 'og_ui.admin.inc',
+    'weight' => -8,
+  );
+
+  // Node specific permission edit
+  // group/[1: Group type]/[2: Group ID]/admin/permission/[5: Role ID]/edit
+  $items['group/%/%/admin/permission/%/edit'] = array(
+    'title' => "Edit role's permissions",
+    'description' => 'Determine access to features by selecting permissions for role.',
+    'page callback' => 'drupal_get_form',
+    // Passing empty bundle name to og_ui_admin_permissions. The bundle will be
+    // loaded from the role.
+    'page arguments' => array('og_ui_admin_permissions', 1, 2, '', 5),
+    'access callback' => 'og_ui_access_entity_role',
+    'access arguments' => array('manage permissions', 1, 2, 5),
+    'file' => 'og_ui.admin.inc',
+    'weight' => -9,
+  );
+
+  foreach (og_get_all_group_entity() as $entity_type => $value) {
+    if ($entity_type == 'taxonomy_term') {
+      $path = 'taxonomy/term/%/group';
+      $argument = 2;
+    }
+    else {
+      $path = "$entity_type/%/group";
+      $argument = 1;
+    }
+
+    $items[$path] = array(
+      'title' => 'Group',
+      'page callback' => 'og_ui_group_admin_overview',
+      'page arguments' => array($entity_type, $argument),
+      'access callback' => 'og_ui_get_group_admin',
+      'access arguments' => array($entity_type, $argument),
+      'type' => MENU_LOCAL_TASK,
+      'file' => 'og_ui.admin.inc',
+      'context' => MENU_CONTEXT_PAGE | MENU_CONTEXT_INLINE,
+    );
+  }
+  */
+  $items['admin/config/group'] = array(
+    'title' => 'Organic groups',
+    'description' => 'Administer the suite of Organic groups modules.',
+    'route_name' => 'og_ui.admin.group',
+    'position' => 'right',
+    'weight' => -5,
+  );
+
+  $items['admin/config/group/settings'] = array(
+    'title' => 'OG settings',
+    'description' => 'Administer OG settings.',
+    'route_name' => 'og_ui.admin.group.settings',
+  );
+/*
+  $items['admin/config/group/permissions'] = array(
+    'page callback' => 'og_ui_group_types_overview',
+    'page arguments' => array('permissions'),
+    'title' => 'OG permissions overview',
+    'access arguments' => array('administer group'),
+    'description' => 'Overview of Organic groups permissions.',
+    'file' => 'og_ui.admin.inc',
+  );
+
+  // Add menu item for each group type.
+  // admin/config/group/roles/[Entity type]/[Group bundle]
+  foreach (og_get_all_group_bundle() as $entity_type => $bundles) {
+    $entity_info = entity_get_info($entity_type);
+    foreach ($bundles as $bundle_name => $bundle_label) {
+      $items["admin/config/group/permissions/$entity_type/$bundle_name"] = array(
+        'page callback' => 'drupal_get_form',
+        'page arguments' => array('og_ui_admin_global_permissions', $entity_type, '0', $bundle_name),
+        'title callback' => 'og_ui_menu_bundle_roles_title_callback',
+        'title arguments' => array('OG @type - @bundle permissions', $entity_type, $bundle_name),
+        'access callback' => 'og_ui_access_group_permissions',
+        'access arguments' => array($entity_type, $bundle_name),
+        'description' => 'Configure Organic groups group type permissions.',
+        'file' => 'og_ui.admin.inc',
+      );
+    }
+  }
+
+  $items['admin/config/group/permission/%/edit'] = array(
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('og_ui_admin_permissions', '', '0', '', 4),
+    'title callback' => 'og_ui_menu_bundle_roles_title_callback',
+    'title arguments' => array('OG @type - @bundle - @role permissions', '', '', 4),
+    'access callback' => 'og_ui_access_bundle_role',
+    'access arguments' => array(4),
+    'description' => 'Configure Organic groups group type permissions.',
+    'file' => 'og_ui.admin.inc',
+  );
+
+  $items['admin/config/group/roles'] = array(
+    'page callback' => 'og_ui_group_types_overview',
+    'page arguments' => array('roles'),
+    'title' => 'OG roles overview',
+    'access arguments' => array('administer group'),
+    'description' => 'Overview of organic groups roles.',
+    'file' => 'og_ui.admin.inc',
+  );
+
+  // Add menu item for each group type.
+  // admin/config/group/roles/[Entity type]/[Group bundle]
+  foreach (og_get_all_group_bundle() as $entity_type => $bundles) {
+    $entity_info = entity_get_info($entity_type);
+    foreach ($bundles as $bundle_name => $bundle_label) {
+      $items["admin/config/group/roles/$entity_type/$bundle_name"] = array(
+        'page callback' => 'drupal_get_form',
+        'page arguments' => array('og_ui_admin_new_role', $entity_type, '0', $bundle_name),
+        'title callback' => 'og_ui_menu_bundle_roles_title_callback',
+        'title arguments' => array('OG @type - @bundle roles', $entity_type, $bundle_name),
+        'access callback' => 'og_ui_access_bundle',
+        'access arguments' => array($entity_type, $bundle_name),
+        'description' => 'Configure Organic groups group type roles.',
+        'file' => 'og_ui.admin.inc',
+      );
+    }
+  }
+
+  $items['admin/config/group/role/%/edit'] = array(
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('og_ui_admin_roles', '', '0', '', 4),
+    'title callback' => 'og_ui_menu_bundle_roles_title_callback',
+    'title arguments' => array('OG @type - @bundle - @role', '', '', 4),
+    'access callback' => 'og_ui_access_bundle_role',
+    'access arguments' => array(4),
+    'description' => 'Configure Organic groups group type roles.',
+    'file' => 'og_ui.admin.inc',
+  );
+*/
+
+  $items['admin/config/group/fields'] = array(
+    'title' => 'OG field settings',
+    'description' => 'Configure Organic groups fields in bundles.',
+    'route_name' => 'og_ui.admin.group.fields',
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  $items['admin/config/group/fields/%entity_type/%bundle_name/%field_instance/delete'] = array(
+    'title' => 'Delete',
+    'description' => 'Delete an OG field from a bundle.',
+    'route_name' => 'og_ui.admin.group.fields.delete',
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  return $items;
+}

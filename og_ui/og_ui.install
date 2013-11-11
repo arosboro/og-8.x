@@ -1,0 +1,13 @@
+<?php
+
+/**
+ * @file
+ * Install, update, and uninstall functions for the Organic groups UI module.
+ */
+
+/**
+ * Implements hook_uninstall().
+ */
+function og_ui_uninstall() {
+  // TODO delete configuration
+}

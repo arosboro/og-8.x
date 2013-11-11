@@ -1,0 +1,28 @@
+og_ui.admin.group:
+  path: 'admin/config/group'
+  defaults:
+    _content: '\Drupal\system\Controller\SystemController::systemAdminMenuBlockPage'
+    _title: 'Organic groups'
+  requirements:
+    _permission: 'administer group'
+og_ui.admin.group.settings:
+  path: 'admin/config/group/settings'
+  defaults:
+    _form: '\Drupal\og_ui\Form\AdminSettingsForm'
+    _title: 'OG settings'
+  requirements:
+    _permission: 'administer group'
+og_ui.admin.group.fields:
+  path: 'admin/config/group/fields'
+  defaults:
+    _form: '\Drupal\og_ui\Form\FieldSettingsForm'
+    _title: 'OG field settings'
+  requirements:
+    _permission: 'administer group'
+og_ui.admin.group.fields.delete:
+  path: 'admin/config/group/fields/{field_instance}/delete'
+  defaults:
+    _entity_form: field_instance.delete
+    _title: 'Delete'
+  requirements:
+    _permission: 'administer group'
