@@ -1,30 +1,11 @@
 <?php
 
 /**
- * Helper function; Get the mocked instance.
+ * Helper function; Get the mocked widget.
  */
-function og_get_mocked_instance($instance, $field_mode) {
-  $mocked_instance = $instance;
-
-  $widget_type = $instance->settings['behaviors']['og_widget'][$field_mode]['widget_type'];
-  dpm($instance, $field_mode);
-
-  $mocked_widget = array();
-  $mocked_widget['type'] = $widget_type;
-
-  $options = entity_get_form_display($instance->entity_type, $instance->bundle, 'default')->getComponent(OG_AUDIENCE_FIELD);
-  $plugin_definition = \Drupal::service('plugin.manager.field.widget')->getDefinition($options['type']);
-  dpm($plugin_definition, $options['type']);
+function og_get_mocked_widget($widget_type, $field) {
   $widget_definition = \Drupal::service('plugin.manager.field.widget')->getDefinition($widget_type);
-  dpm($widget_definition, $widget_type);
-  $mocked_widget['type'] = $widget_type;
-  // Set the widget's module.
-  $mocked_widget['module'] = $widget_defintion['module'];
-  $mocked_widget['settings'] = drupal_array_merge_deep($plugin_definition['settings'], $widget_definition['settings']);
-
-  // See OgSelectionHandler::buildEntityFieldQuery().
-  $mocked_instance['field_mode'] = $field_mode;
-  return $mocked_instance;
+  return new $widget_definition['class']($widget_type, $widget_definition, $field, $widget_definition['settings']);
 }
 
 /**

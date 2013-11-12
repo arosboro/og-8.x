@@ -7,6 +7,7 @@
 
 namespace Drupal\og\Plugin\Field\FieldWidget;
 
+use Drupal\Core\Field\FieldItemList;
 use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\field\Field;
@@ -69,9 +70,12 @@ class OgComplexWidget extends AutocompleteWidgetBase {
 
     $identifier = $field_name . ':' . $entity_type . ':' . $bundle . ':' . $id;
     if (isset($cache[$identifier])) {
+      // TODO remove comment.
       //return array();
     }
     $cache[$identifier] = TRUE;
+
+//    ctools_include('fields');
 
     $field_modes = array('default');
     $has_admin = FALSE;
@@ -94,7 +98,6 @@ class OgComplexWidget extends AutocompleteWidgetBase {
       $entity_gids[] = $item['target_id'];
     }
 
-
     $target_type = $field->getFieldSetting('target_type');
 
     $user_gids = og_get_entity_groups();
@@ -103,13 +106,33 @@ class OgComplexWidget extends AutocompleteWidgetBase {
     // Get the "Other group" group IDs.
     $other_groups_ids = array_diff($entity_gids, $user_gids);
 
-    $instance = Field::fieldInfo()->getInstance($entity_type, $bundle, $field_name);
-
     foreach ($field_modes as $field_mode) {
-      $widget_type = $instance->settings['behaviors']['og_widget'][$field_mode]['widget_type'];
-      $widget_definition = \Drupal::service('plugin.manager.field.widget')->getDefinition($widget_type);
+      $mocked_instance = \Drupal::config("field.instance.$entity_type.$bundle.$field_name")->get();
+      $complex_element = $element;
+      $dummy_entity = $entity->createDuplicate();
 
+      
       if ($has_admin) {
+        $complex_element['#required'] = FALSE;
+        if ($field_mode == 'default') {
+          $complex_element['#title'] = t('Your groups');
+          if ($entity_type == 'user') {
+            $complex_element['#description']= t('Associate this user with groups you belong to.');
+          }
+          else {
+            $complex_element['#description'] = t('Associate this content with groups you belong to.');
+          }
+        }
+        else {
+          $complex_element['#title'] = t('Other groups');
+          if ($entity_type == 'user') {
+            $complex_element['#description'] = t('As groups administrator, associate this user with groups you do <em>not</em> belong to.');
+          }
+          else {
+            $complex_element['#description'] = t('As groups administrator, associate this content with groups you do <em>not</em> belong to.');
+          }
+        }
+
         if ($id) {
           // The field might be required, and it will throw an exception
           // when we try to set an empty value, so change the wrapper's
@@ -132,39 +155,14 @@ class OgComplexWidget extends AutocompleteWidgetBase {
             $field->set('target_id', $valid_ids ? $valid_ids : NULL);
           }
         }
-
-        dpm($widget_definition);
-        $widget = new $widget_definition['class']($widget_type, $widget_definition, $field, $widget_definition['settings']);
-        $mocked_element = $widget->formElement($items, $delta, $element, $form, $form_state);
-        dpm($mocked_element);
-
-        $mocked_element['#required'] = FALSE;
-        if ($field_mode == 'default') {
-          $mocked_element['#title'] = t('Your groups');
-          if ($entity_type == 'user') {
-            $mocked_element['#description'] = t('Associate this user with groups you belong to.');
-          }
-          else {
-            $mocked_element['#description'] = t('Associate this content with groups you belong to.');
-          }
-        }
-        else {
-          $mocked_element['#title'] = t('Other groups');
-          if ($entity_type == 'user') {
-            $mocked_element['#description'] = t('As groups administrator, associate this user with groups you do <em>not</em> belong to.');
-          }
-          else {
-            $mocked_element['#description'] = t('As groups administrator, associate this content with groups you do <em>not</em> belong to.');
-          }
-        }
       }
       else {
         // Non-admin user.
-        /*$mocked_instance_other_groups = $mocked_instance;
-        $mocked_instance_other_groups['field_mode'] = 'admin';*/
+        $mocked_instance_other_groups = $mocked_instance;
+        $mocked_instance_other_groups['field_mode'] = 'admin';
         if ($other_groups_ids && $valid_ids = SelectionPluginManager::getSelectionHandler($field)->validateReferencableEntities($other_groups_ids)) {
           foreach ($valid_ids as $id) {
-            $element['#other_groups_ids'][] = array('target_id' => $id);
+            $complex_element['#other_groups_ids'][] = array('target_id' => $id);
           }
         }
       }
@@ -174,39 +172,44 @@ class OgComplexWidget extends AutocompleteWidgetBase {
         // Form is "fresh" (i.e. not call from field_add_more_submit()), so
         // re-set the items-count, to show the correct amount for the mocked
         // instance.
-        $dummy_form_state['field'][$field_name]['und']['items_count'] =  count($field->get('target_id'));
+        $dummy_form_state['field']['#parents']['#fields'][$field_name]['items_count'] =  count($field->get('target_id'));
       }
 
-      $new_element = ctools_field_invoke_field($mocked_instance, 'form', $entity_type, $dummy_entity, $form, $dummy_form_state, array('default' => TRUE));
-      Field::WidgetBase->form($items, array &$form, array &$form_state)
-      $element[$field_mode] = $new_element[$field_name][LANGUAGE_NONE];
-      if (in_arrayy($widget_type, array('entity_reference_autocomplete', 'entity_reference_autocomplete_tags'))) {
+//      $new_element = ctools_field_invoke_field($mocked_instance, 'form', $entity_type, $dummy_entity, $form, $dummy_form_state, array('default' => TRUE));
+      $widget_type = $mocked_instance['settings']['behaviors']['og_widget'][$field_mode]['widget_type'];
+      $widget = og_get_mocked_widget($widget_type, $field);
+      $complex_element = $widget->formElement($items, $delta, $complex_element, $form, $dummy_form_state);
+//      dpm($widget, 'widget');
+//      dpm($complex_element, 'complex_element');
+
+      $new_element[$field_mode] = $complex_element;
+      if (in_array($widget_type, array('entity_reference_autocomplete', 'entity_reference_autocomplete_tags'))) {
         // Change the "Add more" button name so it adds only the needed
         // element.
         if (!empty($mocked_element[$field_mode]['add_more']['#name'])) {
-          $mocked_element[$field_mode]['add_more']['#name'] .= '__' . $field_mode;
+          $new_element[$field_mode]['add_more']['#name'] .= '__' . $field_mode;
         }
 
         if ($widget_type == 'entity_reference_autocomplete') {
-          dpm($mocked_element);
-          foreach (array_keys($mocked_element[$field_mode]) as $delta) {
+          foreach (array_keys($new_element[$field_mode]['target_id']) as $delta) {
             if (!is_numeric($delta)) {
               continue;
             }
 
-            $sub_element = &$mocked_element[$field_mode][$delta]['target_id'];
+            $sub_element = &$new_element[$field_mode]['target_id'][$delta];
             _og_field_widget_replace_autocomplete_path($sub_element, $field_mode);
 
           }
         }
         else {
           // Tags widget, there's no delta, we can pass the element itself.
-          _og_field_widget_replace_autocomplete_path($mocked_element[$field_mode], $field_mode);
+          _og_field_widget_replace_autocomplete_path($element[$field_mode], $field_mode);
         }
       }
     }
+//    dpm($new_element, 'new_element');
 
-    return $mocked_element;
+    return $new_element;
   }
 
   /**
