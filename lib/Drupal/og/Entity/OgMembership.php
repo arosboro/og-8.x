@@ -8,7 +8,9 @@
 
 namespace Drupal\og\Entity;
 
-use Drupal\Core\Entity\Entity;
+use Drupal\Core\Entity\ContentEntityBase;
+use Drupal\field\Field;
+use Drupal\og\OgMembershipInterface;
 use Drupal\og\OgException;
 
 /**
@@ -21,16 +23,128 @@ use Drupal\og\OgException;
  *      "storage" = "Drupal\Core\Entity\FieldableDatabaseStorageController"
  *   },
  *   base_table = "og_membership",
+ *   fieldable = TRUE,
+ *   label_callback = "og_membership_label",
  *   entity_keys = {
  *     "id" = "id",
- *     "label" = "name",
+ *     "label" = "description",
+ *     "name" = "name",
  *     "uuid" = "uuid"
+ *   },
+ *   bundles = {},
+ *   bundle_keys = {
+ *     "bundle" = "name"
  *   }
  * )
+ *
+ *  // TODO
+ *  'module' => 'og',
+ *  'metadata controller class' => 'OgMembershipMetadataController',
+ *  'views controller class' => 'OgMembershipViewsController',
+ *  'access callback' => 'og_membership_access',
  */
-class OgMembership extends Entity {
+class OgMembership extends ContentEntityBase implements OgMembershipInterface {
   public function __construct(array $values = array(), $entityType = NULL) {
     parent::__construct($values, 'og_membership');
+  }
+
+  public static function baseFieldDefinitions($entity_type) {
+    $properties['id'] = array(
+      'label' => t('Group membership ID'),
+      'description' => t("The group membership's unique ID."),
+      'type' => 'integer_field',
+      'read-only' => TRUE,
+    );
+
+    $properties['type'] = array(
+      'label' => t('Group membership type'),
+      'description' => 'Reference to a group membership type.',
+      'type' => 'text_field',
+      'read-only' => TRUE,
+    );
+
+    $properties['etid'] = array(
+      'label' => t('Entity ID'),
+      'description' => t('The entity ID.'),
+      'type' => 'integer_field',
+      'read-only' => TRUE,
+    );
+
+    $properties['entity_type'] = array(
+      'label' => t('Entity type'),
+      'description' => t("The entity type (e.g. node, comment, etc)."),
+      'type' => 'text_field',
+      'read-only' => TRUE,
+    );
+
+    /*
+      'gid'               => array(
+      'description'     => "The group's unique ID.",
+      'type'            => 'int',
+      'size'            => 'normal',
+      'not null'        => TRUE,
+    ),
+      'group_type' => array(
+      'description' => "The group's entity type (e.g. node, comment, etc').",
+      'type' => 'varchar',
+      'length' => '32',
+      'not null' => TRUE,
+      'default' => '',
+    ),
+      'state' => array(
+      'description' => 'The state of the group content.',
+      'type' => 'varchar',
+      'length' => 255,
+      'not null' => FALSE,
+      'default' => '',
+    ),
+      'created' => array(
+      'description' => 'The Unix timestamp when the group content was created.',
+      'type' => 'int',
+      'not null' => TRUE,
+      'default' => 0,
+    ),
+      'field_name' => array(
+      'type' => 'varchar',
+      'length' => 255,
+      'not null' => TRUE,
+      'default' => '',
+      'description' => "The name of the field holding the group ID, the OG memebership is associated with.",
+    ),
+      'language' => array(
+      'description' => 'The {languages}.language of this membership.',
+      'type' => 'varchar',
+      'length' => 12,
+      'not null' => TRUE,
+      'default' => '',
+    ),*/
+
+    return $properties;
+  }
+
+  public function id() {
+    return $this->get('id')->value;
+  }
+
+  /**
+   * Gets the associated OG membership type.
+   *
+   * @return OgMembershipType
+   */
+  public function type() {
+    return $this->get('type')->value;
+  }
+
+  public function etid() {
+    return $this->get('etid')->value;
+  }
+
+  public function entityType() {
+    return $this->get('entity_type')->value;
+  }
+
+  public function getChangedTime() {
+    return $this->get('changed')->value;
   }
 
   /**
@@ -40,8 +154,10 @@ class OgMembership extends Entity {
    * under a valid field.
    */
   public function save() {
-    $entity_type = $this->entity_type;
-    $etid = $this->etid;
+    $entity_type = $this->entityType();
+    $etid = $this->etid();
+    dpm($entity_type, 'entity_type');
+    dpm($etid, 'etid');
 
     if ($entity_type == 'user' && !$etid) {
       throw new OgException('OG membership can not be created for anonymous user.');
@@ -68,14 +184,14 @@ class OgMembership extends Entity {
       '%field-name' => $field_name,
     );
 
-    $field = Field::fieldInfo()->getField($field_name);
+    $field = Field::fieldInfo()->getField($entity_type, $field_name);
     $settings = $field->getFieldSettings();
 
     if (!$field || !Field::fieldInfo()->getInstance($entity_type, $bundle, $field_name)) {
       throw new OgException(format_string('OG membership can not be created in entity %entity-type and bundle %entity-bundle using the field %field-name as the field does not exist.', $params));
     }
 
-    if (!og_is_group_audience_field($field_name)) {
+    if (!og_is_group_audience_field($entity_type, $field_name)) {
       throw new OgException(format_string('OG membership can not be created with %field-name as it is not a valid group-audience type.', $params));
     }
 
@@ -134,14 +250,5 @@ class OgMembership extends Entity {
    */
   public function group() {
     return entity_load($this->group_type, $this->gid);
-  }
-
-  /**
-   * Gets the associated OG membership type.
-   *
-   * @return OgMembershipType
-   */
-  public function type() {
-    return og_membership_type_load($this->name);
   }
 }

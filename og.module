@@ -113,6 +113,519 @@ function og_menu() {
 }
 
 /**
+ * Implements hook_entity_info().
+ */
+function og_entity_info() {
+  $items['og_membership_type'] = array(
+    'label' => t('OG membership type'),
+    'controller class' => 'EntityAPIControllerExportable',
+    'entity class' => 'OgMembershipType',
+    'base table' => 'og_membership_type',
+    'fieldable' => TRUE,
+    'entity keys' => array(
+      'id' => 'id',
+      'label' => 'description',
+      'name' => 'name',
+    ),
+    'exportable' => TRUE,
+    'export' => array(
+      'default hook' => 'default_og_membership_type',
+    ),
+    'bundle of' => 'og_membership',
+    'module' => 'og',
+    'metadata controller class' => 'EntityDefaultMetadataController',
+    'views controller class' => 'EntityDefaultViewsController',
+    'access callback' => 'og_membership_type_access',
+    'entity cache' => module_exists('entitycache'),
+  );
+
+  if (class_exists('OgMembershipTypeUIController')) {
+    $items['og_membership_type'] += array(
+      // Enable the entity API's admin UI.
+      'admin ui' => array(
+        // TODO: This path doesn't exist before OG-ui.
+        'path' => 'admin/config/group/group-membership',
+        'file' => 'includes/og.admin.inc',
+        'controller class' => 'OgMembershipTypeUIController',
+      ),
+    );
+  }
+
+  $items['og_membership'] = array(
+    'label' => t('OG membership'),
+    'entity class' => 'OgMembership',
+    'controller class' => 'EntityAPIController',
+    'base table' => 'og_membership',
+    'fieldable' => TRUE,
+    'entity keys' => array(
+      'id' => 'id',
+      // The message has no label.
+      'label' => FALSE,
+      'bundle' => 'type',
+    ),
+    'label callback' => 'og_membership_label',
+    'bundles' => array(),
+    'bundle keys' => array(
+      'bundle' => 'name',
+    ),
+    'module' => 'og',
+    'metadata controller class' => 'OgMembershipMetadataController',
+    'views controller class' => 'OgMembershipViewsController',
+    'access callback' => 'og_membership_access',
+//    'entity cache' => \Drupal::moduleHandler()->moduleExists(entitycache),
+  );
+
+  // Add bundle info but bypass entity_load() as we cannot use it here.
+  if (db_table_exists('og_membership_type')) {
+    $memberships = db_select('og_membership_type', 'g')
+        ->fields('g')
+        ->execute()
+        ->fetchAllAssoc('name');
+
+    foreach ($memberships as $type_name => $type) {
+      $items['og_membership']['bundles'][$type_name] = array(
+        'label' => $type->name,
+        'admin' => array(
+          'path' => 'admin/config/group/group-membership/manage/%og_membership_type',
+          'real path' => 'admin/config/group/group-membership/manage/' . $type->name,
+          'bundle argument' => 5,
+          'access arguments' => array('administer group'),
+        ),
+      );
+    }
+  }
+
+  return $items;
+}
+
+/**
+ * Implements hook_entity_field_info().
+ */
+function og_entity_field_info($entity_type) {
+  $info = array();
+
+  // Add OG membership metadata for every bundle that is a group content.
+  foreach (og_get_all_group_content_bundle() as $entity_type => $bundles) {
+    foreach ($bundles as $bundle => $bundle_value) {
+      $info['optional']['og_membership'] = array(
+        'label' => t("OG memberships"),
+        'type' => 'og_membership',
+        'list' => TRUE,
+        'description' => t("A list of all OG memberships of the @name entity.", array('@name' => $entity_type)),
+        'getter callback' => 'og_get_og_membership_properties',
+        'class' => '\Drupal\og\Entity\OgMembership',
+      );
+      $info['bundle map'][$bundle][] = 'og_membership';
+
+      // Add per-state properties.
+      $general = $info['optional']['og_membership'];
+      foreach (og_group_content_states() as $state => $state_label) {
+        $params = array('@state' => $state_label, '@name' => $entity_type);
+        $info['optional']['og_membership__' . $state] = $general;
+        $info['optional']['og_membership__' . $state]['label'] = t('@state OG membership', $params);
+        $info['optional']['og_membership__' . $state]['description'] = t("A list of all OG memberships of the @name entity with @state state.", $params);
+        $info['bundle map'][$bundle][] = 'og_membership__' . $state;
+      }
+
+      // Add OG membership per field in a bundle.
+      foreach (og_get_group_audience_fields($entity_type, $bundle) as $field_name => $label) {
+        $params = array('@label' => $label);
+        $field = \Drupal\field\Field::fieldInfo()->getField($entity_type, $field_name);
+        $field_settings = $field->getFieldSettings();
+        $group_type = $field_settings['target_type'];
+        $info['optional'][$field_name . '__og_membership'] = array(
+          'label' => t('OG membership from field @label', $params),
+          'type' => 'og_membership',
+          'list' => TRUE,
+          // The bundle in this context means the OG membership type.
+          'bundle' => $field_settings['handler_settings']['membership_type'],
+          'description' => t('A list of all OG memberships registered in field @label.', $params),
+          'getter callback' => 'og_get_field_og_membership_properties',
+          'class' => '\Drupal\og\Entity\OgMembership',
+        );
+        $info['bundle map'][$bundle][] = $field_name . '__og_membership';
+
+        // Add per-state properties.
+        $general = $info['optional'][$field_name . '__og_membership'];
+        foreach (og_group_content_states() as $state => $state_label) {
+          $params = array(
+            '@label' => $label,
+            '@label' => $label,
+            '@state' => $state_label,
+          );
+          $info['optional'][$field_name . '__og_membership__' . $state] = $general;
+          $info['optional'][$field_name . '__og_membership__' . $state]['label'] = t('@state OG memberships from field @label', $params);
+          $info['optional'][$field_name . '__og_membership__' . $state]['description'] = t('A list of all OG memberships with @state registered in field @label.', $params);
+          $info['bundle map'][$bundle][] = $field_name . '__og_membership';
+        }
+      }
+    }
+  }
+
+  foreach (og_get_all_group_bundle() as $entity_type => $bundles) {
+    foreach ($bundles as $bundle => $bundle_value) {
+      $info['optional']['members'] = array(
+        'label' => t("Group members"),
+        'type' => 'user',
+        'list' => TRUE,
+        'description' => t("A list group members of the @name entity.", array('@name' => $entity_type)),
+        'getter callback' => 'og_get_group_members_properties',
+      );
+      $info['bundle map'][$bundle][] = 'members';
+
+      // Add per-state properties.
+      $general = $info['optional']['members'];
+      foreach (og_group_content_states() as $state => $state_label) {
+        $params = array('@state' => $state_label, '@name' => $entity_type);
+        $info['optional']['members__' . $state] = $general;
+        $info['optional']['members__' . $state]['label'] = t('@state group members', $params);
+        $info['optional']['members__' . $state]['description'] = t("A list of all users of the @name entity with @state state.", $params);
+        $info['bundle map'][$bundle][] = 'members__' . $state;
+      }
+    }
+  }
+
+  return $info;
+}
+
+/**
+ * Property getter callback for group members.
+ *
+ * @see og_entity_property_info()
+ */
+function og_get_group_members_properties($entity, array $options, $name, $type) {
+  $args = explode('__', $name);
+  $state = !empty($args[1]) ? $args[1] : FALSE;
+  $id = $entity->id();
+
+  $cache = &drupal_static(__FUNCTION__, array());
+  if (isset($cache[$type][$id][$state])) {
+    // Return the cached result.
+    return $cache[$type][$id][$state];
+  }
+  $cache[$type][$id][$state] = array();
+
+  $query = \Drupal::entityQuery('og_membership');
+  $query
+      ->condition('group_type', $type, '=')
+      ->condition('gid', $id, '=')
+      ->condition('entity_type', 'user', '=');
+
+  if ($state) {
+    $query->condition('state', $state, '=');
+  }
+
+  $result = $query->execute();
+  if (!empty($result['og_membership'])) {
+    $og_memberships = og_membership_load_multiple(array_keys($result['og_membership']));
+    foreach ($og_memberships as $og_membership) {
+      $cache[$type][$id][$state][] = $og_membership->etid;
+
+    }
+  }
+  return $cache[$type][$id][$state];
+}
+
+/**
+ * Property getter callback for OG membership.
+ *
+ * @see og_entity_property_info()
+ */
+function og_get_og_membership_properties($entity, array $options, $name, $type) {
+  // Get the state from name, if exists.
+  if ($name == 'og_membership') {
+    $state = array();
+  }
+  else {
+    $args = explode('__', $name);
+    $state = array($args[1]);
+  }
+
+  $ids = array();
+
+  if ($gids = og_get_entity_groups($type, $entity, $state)) {
+    $ids = array();
+    foreach ($gids as $group_type => $values) {
+      $ids = array_merge($ids, array_keys($values));
+    }
+  }
+
+  return $ids;
+}
+
+/**
+ * Property getter callback for OG membership per field.
+ *
+ * @see og_entity_property_info()
+ */
+function og_get_field_og_membership_properties($entity, array $options, $name, $type) {
+  $args = explode('__', $name);
+  // Field name might have double underscore as-well, so we need to make
+  // sure we get it right.
+  $last_char = substr($name, -1);
+  $state = is_numeric($last_char) ? $last_char : FALSE;
+
+  // The number of characters to ignore in the name (i.e. remove the
+  // "__og_membership" or "__og_membership__0").
+  $remove_char = $state ? -18 : -15;
+  $field_name = substr($name, 0, $remove_char);
+
+  $field_name = $args[0];
+  $state = count($args) == 2 ? FALSE : $args[2];
+  $id = $entity->id();
+
+  $identifier = $type . ':' . $id . ':' . $field_name . ':' . $state;
+  $cache = &drupal_static(__FUNCTION__, array());
+  if (isset($cache[$identifier])) {
+    // Return the cached result.
+    return $cache[$identifier];
+  }
+
+  $query = \Drupal::entityQuery('og_membership');
+  $query
+      ->condition('entity_type', $type, '=')
+      ->condition('etid', $id, '=')
+      ->condition('field_name', $field_name, '=');
+
+  if ($state) {
+    $query->condition('state', $state, '=');
+  }
+
+  $result = $query->execute();
+  $cache[$identifier] = !empty($result['og_membership']) ? array_keys($result['og_membership']) : array();
+  return $cache[$identifier];
+}
+
+/**
+ * Implements hook_field_create_instance().
+ *
+ * - Create default OG roles per entity-type and bundle.
+ * - Create a group audience field on the user's entity, referencing the first
+ *   group defined.
+ */
+function og_field_create_instance($entity) {
+  if ($entity->getFieldName() != OG_GROUP_FIELD) {
+    return;
+  }
+
+//   TODO og_roles_override
+  // Create default roles per entity-type per bundle.
+//  og_roles_override($entity->entityType(), $entity->bundle(), 0);
+
+  // Check if we need to add a group audience on the user's entity.
+  // We add a different field, so each field can be set differently.
+  $entity_type = $entity->entity_type;
+  $bundle = $entity->bundle;
+
+  foreach (array_keys(og_get_group_audience_fields()) as $field_name) {
+    $field = \Drupal\field\Field::fieldInfo()->getField('user', $field_name);
+
+    $settings = $field->getFieldSettings();
+    if ($settings['target_type'] == $entity_type  && empty($settings['handler_settings']['target_bundles'])) {
+      return;
+    }
+
+    if ($settings['target_type'] == $entity_type && in_array($bundle, $settings['handler_settings']['target_bundles'])) {
+      return;
+    }
+  }
+
+  // If we reached here, it means we need to create a field.
+  // Pick an unused name.
+  $field_name = substr("og_user_$entity_type", 0, 32);
+  $i = 1;
+  while (\Drupal\field\Field::fieldInfo()->getField($entity_type, $field_name)) {
+    $field_name = substr("og_user_$entity_type", 0, 32 - strlen($i)) . $i;
+    ++$i;
+  }
+
+  $og_field = og_fields_info(OG_AUDIENCE_FIELD);
+  $og_field['field']['settings']['target_type'] = $entity_type;
+  $og_field['instance']['label'] = t('Group membership');
+
+  // If the user entity type has multiple bundles, make sure to attach a field
+  // entity to all of them.
+  $entity_bundles = entity_get_bundles('user');
+  foreach ($entity_bundles as $user_bundle => $bundle_info) {
+    og_create_field($field_name, 'user', $user_bundle, $og_field);
+  }
+}
+
+/**
+ * Implements field_delete_instance().
+ *
+ * - Invalidate OG's static cache if a group-audience field is deleted.
+ * - Delete the default OG roles per entity-type and bundle.
+ */
+function og_field_delete_instance($entity) {
+  if (og_is_group_audience_field($entity->entity_type, $entity->getFieldName())) {
+    og_invalidate_cache();
+  }
+
+  if ($entity->getFieldName() != OG_GROUP_FIELD) {
+    return;
+  }
+
+  // Get the per-bundle roles.
+  // TODO og_roles
+  /*roles = og_roles($entity->entityType(), $entity->bundle());
+  foreach ($roles as $rid => $name) {
+    og_role_delete($rid);
+  }*/
+}
+
+/**
+ * Implements hook_entity_insert().
+ */
+function og_entity_insert(\Drupal\Core\Entity\EntityInterface $entity) {
+  // React when different types of entities are created.
+  switch ($entity->entityType()) {
+    case 'field_instance':
+      og_field_create_instance($entity);
+      break;
+
+    default:
+      break;
+  }
+
+
+  if (!og_is_group($entity)) {
+    return;
+  }
+  $id = $entity->id();
+  $entity_type = $entity->entityType();
+  $bundle = $entity->bundle();
+
+  if ($entity_type == 'node' && $uid = $entity->getAuthorId() && !empty($uid) || $entity_type == 'user' && $uid = $entity->id()) {
+    // Subscribe the group manager.
+    og_group($entity_type, $id, array('entity' => $uid));
+    // Assign roles to group manager.
+    // TODO assign roles
+    /*
+    $name = 'og_group_manager_default_rids_' . $entity_type . '_' . $bundle;
+    if ($rids = variable_get($name)) {
+      foreach ($rids as $rid) {
+        og_role_grant($entity_type, $id, $entity->uid, $rid);
+      }
+    }
+    */
+  }
+  // TODO roles
+  /*
+  if (!og_is_group_default_access($entity_type, $entity)) {
+    // Override default roles.
+    og_roles_override($entity_type, $bundle, $id);
+  }
+  */
+}
+
+/**
+ * Implements hook_entity_update().
+ */
+function og_entity_update(\Drupal\Core\Entity\EntityInterface $entity) {
+  dpm($entity->entityType(), 'entity_update');
+  if (!og_is_group($entity)) {
+    return;
+  }
+
+  $id = $entity->id();
+  $entity_type = $entity->entityType();
+  $bundle = $entity->bundle();
+  $uid = $entity_type == 'node' ? $entity->getAuthorId() : $entity_type == 'user' ? $entity->id() : 0;
+  if (!empty($uid) && !og_is_member($entity_type, $entity, 'user', $uid)) {
+    // Subscribe the group manager, in case the owner changed.
+    dpm('go to og_group');
+    og_group($entity_type, $id, array('entity' => $uid));
+    // Assign roles to group manager.
+    // TODO roles
+    /*$name = 'og_group_manager_default_rids_' . $entity_type . '_' . $bundle;
+    if ($rids = variable_get($name)) {
+      foreach ($rids as $rid) {
+        og_role_grant($entity_type, $id, $entity->uid, $rid);
+      }
+    }*/
+  }
+  $original_entity = $entity->original;
+  dpm($original_entity, 'original_entity');
+  // TODO OG_DEFAULT_ACCESS_FIELD
+  /*$property = OG_DEFAULT_ACCESS_FIELD;
+
+  if (!empty($entity->{$property}) && $entity->{$property} != $original_entity->{$property}) {
+    if (!og_is_group_default_access($entity_type, $entity)) {
+      // Override default roles.
+      og_roles_override($entity_type, $bundle, $id);
+    }
+    else {
+      // Delete overridden roles.
+      og_delete_user_roles_by_group($entity_type, $entity);
+    }
+  }*/
+}
+
+/**
+ * Implements hook_entity_delete().
+ */
+function og_entity_delete(\Drupal\Core\Entity\EntityInterface $entity) {
+  // React when different types of entities are created.
+  switch ($entity->entityType()) {
+    case 'field_instance':
+      og_field_delete_instance($entity);
+      break;
+
+    default:
+      break;
+  }
+}
+
+/**
+ * Implements hook_field_storage_pre_insert().
+ */
+function og_field_storage_pre_insert(\Drupal\Core\Entity\EntityInterface $entity, $skip_fields) {
+  _og_update_entity_fields($entity, $skip_fields);
+}
+
+/**
+ * Implements hook_field_storage_pre_update().
+ */
+function og_field_storage_pre_update(\Drupal\Core\Entity\EntityInterface$entity, $skip_fields) {
+  _og_update_entity_fields($entity, $skip_fields);
+}
+
+/**
+ * Update the field values in the entity, to reflect the membership.
+ *
+ * This is used to allow other modules that save a new/ existing entity
+ * to act on the field values, even before hook_field_load() is called.
+ */
+function _og_update_entity_fields(\Drupal\Core\Entity\EntityInterface $entity, $skip_fields) {
+  $id = $entity->id();
+  $entity_type = $entity->entityType();
+  $bundle = $entity->bundle();
+  if (!og_is_group_content_type($entity_type, $bundle)) {
+    return;
+  }
+
+  foreach (og_get_group_audience_fields($entity_type, $bundle) as $field_name => $label) {
+    $field = \Drupal\field\Field::fieldInfo()->getField($entity_type, $field_name);;
+    $gids = array();
+    if ($field['cardinality'] == 1) {
+      if ($og_membership = $field->getValue($field_name . '__og_membership')) {
+        // Wrapper return an array.
+        $gids = $og_membership[0]->gid;
+      }
+    }
+    else {
+      foreach ($field->getValue($field_name . '__og_membership') as $og_membership) {
+        $gids[] = $og_membership->gid;
+      }
+    }
+    if ($gids) {
+      $field->setValue($gids);
+    }
+  }
+}
+
+/**
  * OG membership type loader.
  *
  * @param $name
@@ -149,6 +662,83 @@ function og_membership_invalidate_cache() {
 }
 
 /**
+ * Return TRUE if the entity is acting as a group.
+ *
+ * @param $entity
+ *   The entity object, or the entity ID.
+ *
+ * @return boolean
+ */
+function og_is_group(\Drupal\Core\Entity\EntityInterface $entity) {
+  $entity_type = $entity->entityType();
+  $bundle = $entity->bundle();
+
+  $field = \Drupal\field\Field::fieldInfo()->getField($entity_type, OG_GROUP_FIELD);
+  if (!$field) {
+// TODO make config entity
+    return;
+//    return variable_get("og_is_group__{$entity_type}__{$bundle}", FALSE);
+  }
+
+  $value = $entity->{OG_GROUP_FIELD}->value;
+  dpm($value ? "TRUE" : "FALSE");
+  return !empty($value);
+}
+
+/**
+ * Get the first best matching group-audience field.
+ *
+ * @param $entity_type
+ *   The entity type.
+ * @param $entity
+ *   The entity object.
+ * @param $group_type
+ *   The group type.
+ * @param $group_bundle
+ *   The group bundle.
+ * @param $skip_access
+ *   TRUE, if current user access to the field, should be skipped.
+ *   Defaults to FALSE.
+ *
+ * @return string
+ *   Field name of the group audience field.
+ */
+function og_get_best_group_audience_field($entity_type, $entity, $group_type, $group_bundle, $skip_access = FALSE) {
+  $bundle = $entity->bundle();
+
+  $field_names = og_get_group_audience_fields($entity_type, $bundle);
+  if (!$field_names) {
+    return;
+  }
+  foreach ($field_names as $field_name => $label) {
+    $field = \Drupal\field\Field::fieldInfo()->getField($entity_type, $field_name);
+    $settings = $field->getFieldSettings();
+    if ($settings['target_type'] != $group_type) {
+      // Group type doesn't match.
+      continue;
+    }
+    if (!empty($settings['handler_settings']['target_bundles']) && !in_array($group_bundle, $settings['handler_settings']['target_bundles'])) {
+      // Bundles don't match.
+      continue;
+    }
+
+
+    if (!og_check_field_cardinality($entity_type, $entity, $field_name)) {
+      // Field reached maximum.
+      continue;
+    }
+
+    if (!$skip_access && !field_access('view', $field, $entity_type, $entity)) {
+      // User can't access field.
+      continue;
+    }
+
+    return $field_name;
+  }
+}
+
+
+/**
  * Determine if a field can be used and has not reached maximum values.
  *
  * @param $entity_type
@@ -161,8 +751,8 @@ function og_membership_invalidate_cache() {
  *   TRUE|FALSE
  */
 function og_check_field_cardinality($entity_type, $entity, $field_name) {
-  $field = Field::fieldInfo()->getField($field_name);
-  if ($field->getFieldCardinality() == FieldDefinitionInterface::CARDINALITY_UNLIMITED) {
+  $field = \Drupal\field\Field::fieldInfo()->getField($entity_type, $field_name);
+  if ($field->getFieldCardinality() == \Drupal\Core\Field\FieldDefinitionInterface::CARDINALITY_UNLIMITED) {
     return TRUE;
   }
 
@@ -171,6 +761,182 @@ function og_check_field_cardinality($entity_type, $entity, $field_name) {
   }
 
   return count($entity->getValue($field_name . '__og_membership')) < $field->getFieldCardinality();
+}
+
+/**
+ * Set an association (e.g. subscribe) an entity to a group.
+ *
+ * @param $group_type
+ *   The entity type of the group.
+ * @param $gid
+ *   The group entity or ID.
+ * @param $values
+ *   Array with the information to pass along, until it is processed in the
+ *   field handlers.
+ *   - "entity_type": (optional) The entity type (e.g. "node" or "user").
+ *     Defaults to 'user'
+ *   - "entity": (optional) The entity object or entity Id to set the
+ *     association. Defaults to the current user if the $entity_type property is
+ *     set to 'user'.
+ *   - "field_name": The name of the field, the membership should be registered
+ *     in. If no value given, a first field with the correct membership type
+ *     will be used. If no field found, an execpetion will be thrown.
+ * @param $save_created
+ *    (optional) If the OG membership is new, it determines whether the
+ *    membership will be saved. Defaults to TRUE.
+ *
+ * @throws \Drupal\og\OgException
+ *   When a group audience field cannot be found.
+ *
+ * @return \Drupal\og\Entity\OgMembership
+ *   The OG membership entity.
+ */
+function og_group($group_type, $gid, $values = array(), $save_created = TRUE) {
+  dpm('og_group');
+  global $user;
+  // Set default values.
+  $values += array(
+    'entity_type' => 'user',
+    'entity' => FALSE,
+    'field_name' => FALSE,
+    'state' => OG_STATE_ACTIVE,
+  );
+
+  $entity_type = $values['entity_type'];
+  $entity = $values['entity'];
+  $field_name = $values['field_name'];
+  $state = $values['state'];
+
+  if ($entity_type == 'user' && empty($entity)) {
+    $entity = $user->id();
+  }
+
+  // If entity was an ID, get the object.
+  $entity = entity_load($entity_type, $entity);
+  $bundle = $entity->bundle();
+  $id = $entity->id();
+
+  if (is_object($gid)) {
+    $group = $gid;
+
+  }
+  else {
+    $group = entity_load($group_type, $gid);
+  }
+
+  // the group ID might be the entity, so re-populate it.
+  $gid = $group->id();
+  $group_bundle = $group->bundle();
+
+  // Get membership if exists.
+  $og_membership = og_get_membership($group_type, $gid, $entity_type, $id);
+
+  if (!$og_membership && empty($field_name)) {
+    $params = array(
+      '%entity-type' => $entity_type,
+      '%bundle' => $bundle,
+      '%group-type' => $group_type,
+      '%group-bundle' => $group_bundle,
+    );
+
+    // Allow getting fields not accessible by the user.
+    $field_name = og_get_best_group_audience_field($entity_type, $entity, $group_type, $group_bundle, TRUE);
+    if (!$field_name) {
+      throw new \Drupal\og\OgException(format_string('There are no OG fields in entity %entity-type and bundle %bundle referencing %group-type - %group-bundle.', $params));
+    }
+  }
+
+  if ($og_membership) {
+    if (empty($og_membership->is_new) && $og_membership->field_name == $field_name && $og_membership->state == $state) {
+      // Entity is already associated with group.
+      return $og_membership;
+    }
+    elseif (!empty($field_name) && $og_membership->field_name != $field_name) {
+      // Ungroup the current association, as it needs to change field.
+      og_ungroup($group_type, $gid, $entity_type, $id);
+      $og_membership = FALSE;
+    }
+    elseif ($og_membership->state != $state){
+      // Change the state.
+      $og_membership->state = $state;
+    }
+    else {
+      // Nothing changed.
+      return $og_membership;
+    }
+  }
+
+  if (!$og_membership) {
+    // Unset the values, so we don't try to process them.
+    unset($values['entity_type'], $values['entity'], $values['field_name']);
+    // Create a new OG membership.
+    $og_membership = og_membership_create($group_type, $gid, $entity_type, $id, $field_name, $values);
+  }
+
+  if (empty($og_membership->is_new) || $save_created) {
+    // Save the membership for update, or if the OG membership is new when
+    // "save-created" is TRUE.
+    //$og_membership->save();
+  }
+  dpm($og_membership, 'og_membership');
+
+  return $og_membership;
+}
+
+/**
+ * Creates a new OG membership.
+ *
+ * If a group membership already exists, an exception will be thrown.
+ *
+ * @param $group_type
+ *   The entity type of the group.
+ * @param $gid
+ *   The group ID.
+ * @param $entity_type
+ *   The entity type of the group content.
+ * @param $etid
+ *   The entity ID of the group content.
+ * @param $field_name
+ *   The group audience field name.
+ * @param $values
+ *   (optional) Array of fields values to be attached to the OG membership, that
+ *   will be processed using entity-metadata wrapper.
+ *
+ * @throws \Drupal\og\OgException
+ *   When the field_name passed is not a group audience field.
+ *
+ * @return \Drupal\og\Entity\OgMembership
+ *   Returns a new OG membership object.
+ *
+ * @see entity_property_values_create_entity()
+ */
+function og_membership_create($group_type, $gid, $entity_type, $etid, $field_name, $values = array()) {
+  $language = Drupal::languageManager()->getLanguage();
+
+  $values += array(
+    'group_type' => $group_type,
+    'gid' => $gid,
+    'entity_type' => $entity_type,
+    'etid' => $etid,
+    'state' => OG_STATE_ACTIVE,
+    'created' => time(),
+    'field_name' => $field_name,
+    'language' => $language->id,
+  );
+
+  if (!og_is_group_audience_field($entity_type, $field_name)) {
+    throw new \Drupal\og\OgException(format_string('%field-name is not a valid group-audience field.', array('%field-name' => $field_name)));
+  }
+
+  $entity = entity_load($entity_type, $etid);
+  $bundle = $entity->bundle();
+
+  // Get the type from the field.
+  $field = \Drupal\field\Field::fieldInfo()->getField($entity_type, $field_name);
+  $handler_settings = $field->getFieldSetting('handler_settings');
+  $values['type'] = $handler_settings['membership_type'];
+
+  return entity_create('og_membership', $values);;
 }
 
 /**
@@ -339,13 +1105,15 @@ function og_get_entity_groups($entity_type = 'user', $entity = NULL, $states = a
 /**
  * Determine if a field is a group audience type.
  *
+ * @param $entity_type
+ *   The entity_type.
  * @param $field_name
  *   The field name.
  * @return boolean
  *   TRUE|FALSE
  */
-function og_is_group_audience_field($field_name) {
-  $field = Field::fieldInfo()->getField($field_name);
+function og_is_group_audience_field($entity_type, $field_name) {
+  $field = \Drupal\field\Field::fieldInfo()->getField($entity_type, $field_name);
   $settings = $field->getFieldSettings();
   return $field->getFieldType() == 'entity_reference' && ($settings['handler'] == 'og' || strpos($settings['handler'], 'og_') === 0);
 }
@@ -374,23 +1142,30 @@ function og_get_group_audience_fields($entity_type = 'user', $bundle_name = 'use
     return $return[$identifier];
   }
   $return[$identifier] = array();
-
-  foreach (Field::fieldInfo()->getInstances($entity_type) as $key => $instance) {
+  foreach (\Drupal\field\Field::fieldInfo()->getInstances($entity_type) as $key => $instances) {
     if ($key != $bundle_name) {
       continue;
     }
-    if (!og_is_group_audience_field($instance->getFieldName)) {
-      continue;
+    foreach ($instances as $instance) {
+      dpm($instance->getFieldName());
+      if (!og_is_group_audience_field($entity_type, $instance->getFieldName())) {
+        dpm('continue', $entity_type);
+        continue;
+      }
+
+      $field_settings = $instance->getField()->getFieldSettings();
+      dpm($field_settings);
+      if (isset($group_type) && $field_settings['target_type'] != $group_type) {
+        continue;
+      }
+      if ($group_bundle && !empty($field_settings['handler_settings']['target_bundles']) && !in_array($group_bundle, $field_settings['handler_settings']['target_bundles'])) {
+        continue;
+      }
+      $return[$identifier][$instance->getFieldName()] = $instance->getFieldLabel();
     }
-    $field_settings = $instance->getField()->getFieldSettings();
-    if (isset($group_type) && $field_settings['target_type'] != $group_type) {
-      continue;
-    }
-    if ($group_bundle && !empty($field_settings['handler_settings']['target_bundles']) && !in_array($group_bundle, $field_settings['handler_settings']['target_bundles'])) {
-      continue;
-    }
-    $return[$identifier][$instance->getFieldName()] = $instance->getFieldLabel();
+
   }
+
   return $return[$identifier];
 }
 
@@ -435,6 +1210,44 @@ function og_is_group_type($entity_type, $bundle_name) {
 }
 
 /**
+ * Return TRUE if the entity type is a "group content" type.
+ *
+ * This is a wrapper function around og_get_group_type().
+ *
+ * @param $entity_type
+ *   The entity type to be checked.
+ * @param $bundle_name
+ *
+ * @return boolean
+ */
+function og_is_group_content_type($entity_type, $bundle_name) {
+  return og_get_group_type($entity_type, $bundle_name, 'group content');
+}
+
+/**
+ * Return all the entities that are a group content.
+ *
+ * @return array
+ *   Array keyed with the entity type machine name and the entity human readable
+ *   name as the value, or an empty array if no entities are defined as group
+ *   content.
+ */
+function og_get_all_group_content_entity() {
+  $return = array();
+
+  foreach (Drupal::service('plugin.manager.entity')->getDefinitions() as $entity_type => $entity_value) {
+    foreach ($entity_value['bundles'] as $bundle => $bundle_value) {
+      if (og_is_group_content_type($entity_type, $bundle)) {
+        $return[$entity_type] = check_plain($entity_value['label']);
+        // At least one bundle of the entity can be a group, so break.
+        break;
+      }
+    }
+  }
+  return $return;
+}
+
+/**
  * Return all bundles that are a group type.
  *
  * @return array
@@ -453,6 +1266,51 @@ function og_get_all_group_bundle() {
     }
   }
   return $return;
+}
+
+/**
+ * Return all the entities that are a group content.
+ *
+ * @return array
+ *   Array keyed with the entity type machine name and the entity human readable
+ *   name as the value, or an empty array if no entities are defined as group
+ *   content.
+ */
+function og_get_all_group_content_bundle() {
+  $return = array();
+
+  foreach (entity_get_bundles() as $entity_type => $entity_value) {
+    foreach ($entity_value as $bundle => $bundle_value) {
+      if (og_is_group_content_type($entity_type, $bundle)) {
+        $return[$entity_type][$bundle] = check_plain($bundle_value['label']);
+      }
+    }
+  }
+  return $return;
+}
+
+/**
+ * Return TRUE if entity belongs to a group.
+ *
+ * @param $group_type
+ *   The group type.
+ * @param $gid
+ *   The group ID.
+ * @param $entity_type
+ *   The entity type.
+ * @param $entity
+ *   The entity object. If empty the current user will be used.
+ * @param $states
+ *   (optional) Array with the state to return. If empty groups of all state will
+ *   return.
+ *
+ * @return boolean
+ *   TRUE if the entity (e.g. the user) belongs to a group and is not pending or
+ *   blocked.
+ */
+function og_is_member($group_type, $gid, $entity_type = 'user', $entity = NULL, $states = array(OG_STATE_ACTIVE)) {
+  $groups = og_get_entity_groups($entity_type, $entity, $states);
+  return !empty($groups[$group_type]) && in_array($gid, $groups[$group_type]);
 }
 
 /**
@@ -705,4 +1563,25 @@ function og_create_field($field_name, $entity_type, $bundle, $og_field = array()
     og_invalidate_cache();
     entity_info_cache_clear();
   }
+}
+
+/**
+ * Return the states a group can be in.
+ */
+function og_group_states() {
+  return array(
+    OG_STATE_ACTIVE => t('Active'),
+    OG_STATE_PENDING => t('Pending'),
+  );
+}
+
+/**
+ * Return the states a group content can be in.
+ */
+function og_group_content_states() {
+  return array(
+    OG_STATE_ACTIVE => t('Active'),
+    OG_STATE_PENDING => t('Pending'),
+    OG_STATE_BLOCKED => t('Blocked'),
+  );
 }

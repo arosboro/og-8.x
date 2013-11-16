@@ -9,6 +9,48 @@ function og_get_mocked_widget($widget_type, $field) {
 }
 
 /**
+ * Rebuild the element's values, using the default and admin if exists.
+ */
+function og_complex_widget_element_validate($element, &$form_state, $form) {
+  $parents = array_slice($element['#parents'], 0, -1);
+  $subform = \Drupal\Component\Utility\NestedArray::getValue($form_state['values'], $parents);
+
+  $ids = $element['#other_groups_ids'];
+  foreach (array('default', 'admin') as $type) {
+    if (empty($subform[$type]) || !is_array($subform[$type])) {
+      continue;
+    }
+
+    foreach ($subform[$type] as $delta => $value) {
+      if (!empty($value['target_id']) && is_numeric($value['target_id'])) {
+        $ids[] = array('target_id' => $value['target_id']);
+        continue;
+      }
+      else if(is_numeric($value)) {
+        $ids[] = array('target_id' => $value);
+      }
+    }
+  }
+
+  // Set the form values by directly using drupal_array_set_nested_values(),
+  // which allows us to control the element parents. In this case we cut off the
+  // last element that contains the delta 0, as $ids is already keyed with
+  // deltas.
+  $field_parents = array_slice($parents, 0, -2);
+  $field_name = array_shift($field_parents);
+  //\Drupal\Component\Utility\NestedArray::setValue($form_state['values'], $field_parents, $ids, TRUE);
+  $form_state['values'][$field_name] = $ids;
+
+  // If the element is required, ensure that at least one group has been chosen.
+  if ($element['#required']) {
+    $subform = \Drupal\Component\Utility\NestedArray::getValue($form_state['values'], $parents);
+    if (empty($subform)) {
+      form_error($element, t('!name field is required.', array('!name' => $element['#title'])));
+    }
+  }
+}
+
+/**
  * Replace Entity-reference's autocomplete path with our own.
  *
  * @param $element

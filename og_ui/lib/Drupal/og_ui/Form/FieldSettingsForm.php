@@ -10,6 +10,7 @@ namespace Drupal\og_ui\Form;
 use Drupal\Core\Form\ConfigFormBase;
 use Drupal\field\Field;
 use Drupal\Core\Entity\EntityManagerInterface;
+use Drupal\Component\Plugin\Discovery\DiscoveryInterface;
 
 /**
  * Allow site admin to add or remove group fields from fieldable entities.
@@ -189,7 +190,7 @@ class FieldSettingsForm extends ConfigFormBase {
     if (!empty($og_field['entity']) && !in_array($entity_type, $og_field['entity'])) {
       $items = array();
       foreach ($og_field['entity'] as $entity_type) {
-        $info = EntityManagerInterface->getDefinition($entity_type);
+        $info = \Drupal::service('plugin.manager.entity')->getDefinition($entity_type);
         $items[] = $info['label'];
       }
       \Drupal::formBuilder()->setErrorByName('bundles', t('Field %field can only be attached to %entities entity bundles.', $params + array('%entities' => implode(', ', $items))));
