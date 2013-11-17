@@ -12,10 +12,10 @@ function og_get_mocked_widget($widget_type, $field) {
  * Rebuild the element's values, using the default and admin if exists.
  */
 function og_complex_widget_element_validate($element, &$form_state, $form) {
-  $parents = array_slice($element['#parents'], 0, -1);
+  $parents = array($element['#field_name']);
   $subform = \Drupal\Component\Utility\NestedArray::getValue($form_state['values'], $parents);
-
   $ids = $element['#other_groups_ids'];
+
   foreach (array('default', 'admin') as $type) {
     if (empty($subform[$type]) || !is_array($subform[$type])) {
       continue;
@@ -32,14 +32,13 @@ function og_complex_widget_element_validate($element, &$form_state, $form) {
     }
   }
 
-  // Set the form values by directly using drupal_array_set_nested_values(),
+  // Set the form values by directly using NestedArray::setValue(),
   // which allows us to control the element parents. In this case we cut off the
   // last element that contains the delta 0, as $ids is already keyed with
   // deltas.
-  $field_parents = array_slice($parents, 0, -2);
-  $field_name = array_shift($field_parents);
-  //\Drupal\Component\Utility\NestedArray::setValue($form_state['values'], $field_parents, $ids, TRUE);
-  $form_state['values'][$field_name] = $ids;
+  if (count($subform) == 1 || array_slice($element['#parents'], 1, 1) == array('admin')) {
+    \Drupal\Component\Utility\NestedArray::setValue($form_state['values'], array($element['#field_name']), $ids, TRUE);
+  }
 
   // If the element is required, ensure that at least one group has been chosen.
   if ($element['#required']) {

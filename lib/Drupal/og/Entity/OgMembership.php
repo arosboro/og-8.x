@@ -77,47 +77,47 @@ class OgMembership extends ContentEntityBase implements OgMembershipInterface {
       'read-only' => TRUE,
     );
 
-    /*
-      'gid'               => array(
-      'description'     => "The group's unique ID.",
-      'type'            => 'int',
-      'size'            => 'normal',
-      'not null'        => TRUE,
-    ),
-      'group_type' => array(
-      'description' => "The group's entity type (e.g. node, comment, etc').",
-      'type' => 'varchar',
-      'length' => '32',
-      'not null' => TRUE,
-      'default' => '',
-    ),
-      'state' => array(
-      'description' => 'The state of the group content.',
-      'type' => 'varchar',
-      'length' => 255,
-      'not null' => FALSE,
-      'default' => '',
-    ),
-      'created' => array(
-      'description' => 'The Unix timestamp when the group content was created.',
-      'type' => 'int',
-      'not null' => TRUE,
-      'default' => 0,
-    ),
-      'field_name' => array(
-      'type' => 'varchar',
-      'length' => 255,
-      'not null' => TRUE,
-      'default' => '',
-      'description' => "The name of the field holding the group ID, the OG memebership is associated with.",
-    ),
-      'language' => array(
-      'description' => 'The {languages}.language of this membership.',
-      'type' => 'varchar',
-      'length' => 12,
-      'not null' => TRUE,
-      'default' => '',
-    ),*/
+    $properties['gid'] = array(
+      'label' => t('Group ID'),
+      'description' => t("The group's unique ID."),
+      'type' => 'integer_field',
+      'read-only' => TRUE,
+    );
+
+    $properties['group_type'] = array(
+      'label' => t('Group type'),
+      'description' => t("The group's entity type (e.g. node, comment, etc)."),
+      'type' => 'text_field',
+      'read-only' => TRUE,
+    );
+
+    $properties['state'] = array(
+      'label' => t('State'),
+      'description' => t('The state of the group content.'),
+      'type' => 'integer_field',
+      'read-only' => TRUE,
+    );
+
+    $properties['created'] = array(
+      'label' => t('created'),
+      'description' => t('The Unix timestamp when the group content was created.'),
+      'type' => 'integer_field',
+      'read-only' => TRUE,
+    );
+
+    $properties['field_name'] = array(
+      'label' => t('Field name'),
+      'description' => t("The name of the field holding the group ID, the OG memebership is associated with."),
+      'type' => 'text_field',
+      'read-only' => TRUE,
+    );
+
+    $properties['language'] = array(
+      'label' => t('Language'),
+      'description' => t('The language of this membership.'),
+      'type' => 'text_field',
+      'read-only' => TRUE,
+    );
 
     return $properties;
   }
@@ -139,8 +139,32 @@ class OgMembership extends ContentEntityBase implements OgMembershipInterface {
     return $this->get('etid')->value;
   }
 
-  public function entityType() {
+  public function entity_type() {
     return $this->get('entity_type')->value;
+  }
+
+  public function gid() {
+    return $this->get('gid')->value;
+  }
+
+  public function group_type() {
+    return $this->get('group_type')->value;
+  }
+
+  public function state() {
+    return $this->get('state')->value;
+  }
+
+  public function created() {
+    return $this->get('created')->value;
+  }
+
+  public function field_name() {
+    return $this->get('field_name')->value;
+  }
+
+  public function language() {
+    return $this->get('language')->value;
   }
 
   public function getChangedTime() {
@@ -154,7 +178,7 @@ class OgMembership extends ContentEntityBase implements OgMembershipInterface {
    * under a valid field.
    */
   public function save() {
-    $entity_type = $this->entityType();
+    $entity_type = $this->entity_type();
     $etid = $this->etid();
     dpm($entity_type, 'entity_type');
     dpm($etid, 'etid');
@@ -166,21 +190,21 @@ class OgMembership extends ContentEntityBase implements OgMembershipInterface {
     $entity = entity_load($entity_type, $etid);
     $bundle = $entity->bundle();
 
-    $group_type = $this->group_type;
-    $gid = $this->gid;
+    $group_type = $this->group_type();
+    $gid = $this->gid();
     $group = entity_load($group_type, $gid);
     $group_bundle = $group->bundle();
 
-    $field_name = $this->field_name;
+    $field_name = $this->field_name();
 
     // Placeholder for exceptions, in case we need to throw one.
     $params = array(
       '%entity-type' => $entity_type,
       '%entity-bundle' => $bundle,
-      '%etid' => $this->etid,
+      '%etid' => $this->etid(),
       '%group-type' => $group_type,
       '%group-bundle' => $group_bundle,
-      '%gid' => $this->gid,
+      '%gid' => $this->gid(),
       '%field-name' => $field_name,
     );
 

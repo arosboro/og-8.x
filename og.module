@@ -203,6 +203,7 @@ function og_entity_info() {
  */
 function og_entity_field_info($entity_type) {
   $info = array();
+  return;
 
   // Add OG membership metadata for every bundle that is a group content.
   foreach (og_get_all_group_content_bundle() as $entity_type => $bundles) {
@@ -270,6 +271,7 @@ function og_entity_field_info($entity_type) {
         'list' => TRUE,
         'description' => t("A list group members of the @name entity.", array('@name' => $entity_type)),
         'getter callback' => 'og_get_group_members_properties',
+        'class' => '\Drupal\user\Entity\User',
       );
       $info['bundle map'][$bundle][] = 'members';
 
@@ -488,7 +490,6 @@ function og_entity_insert(\Drupal\Core\Entity\EntityInterface $entity) {
       break;
   }
 
-
   if (!og_is_group($entity)) {
     return;
   }
@@ -523,7 +524,6 @@ function og_entity_insert(\Drupal\Core\Entity\EntityInterface $entity) {
  * Implements hook_entity_update().
  */
 function og_entity_update(\Drupal\Core\Entity\EntityInterface $entity) {
-  dpm($entity->entityType(), 'entity_update');
   if (!og_is_group($entity)) {
     return;
   }
@@ -531,10 +531,9 @@ function og_entity_update(\Drupal\Core\Entity\EntityInterface $entity) {
   $id = $entity->id();
   $entity_type = $entity->entityType();
   $bundle = $entity->bundle();
-  $uid = $entity_type == 'node' ? $entity->getAuthorId() : $entity_type == 'user' ? $entity->id() : 0;
-  if (!empty($uid) && !og_is_member($entity_type, $entity, 'user', $uid)) {
+  $uid = ($entity_type == 'node') ? $entity->getAuthorId() : (($entity_type == 'user') ? $entity->id() : 0);
+  if (!empty($uid) && !og_is_member($entity_type, $id, 'user', $uid)) {
     // Subscribe the group manager, in case the owner changed.
-    dpm('go to og_group');
     og_group($entity_type, $id, array('entity' => $uid));
     // Assign roles to group manager.
     // TODO roles
@@ -546,7 +545,6 @@ function og_entity_update(\Drupal\Core\Entity\EntityInterface $entity) {
     }*/
   }
   $original_entity = $entity->original;
-  dpm($original_entity, 'original_entity');
   // TODO OG_DEFAULT_ACCESS_FIELD
   /*$property = OG_DEFAULT_ACCESS_FIELD;
 
@@ -681,7 +679,6 @@ function og_is_group(\Drupal\Core\Entity\EntityInterface $entity) {
   }
 
   $value = $entity->{OG_GROUP_FIELD}->value;
-  dpm($value ? "TRUE" : "FALSE");
   return !empty($value);
 }
 
@@ -792,7 +789,6 @@ function og_check_field_cardinality($entity_type, $entity, $field_name) {
  *   The OG membership entity.
  */
 function og_group($group_type, $gid, $values = array(), $save_created = TRUE) {
-  dpm('og_group');
   global $user;
   // Set default values.
   $values += array(
@@ -876,9 +872,8 @@ function og_group($group_type, $gid, $values = array(), $save_created = TRUE) {
   if (empty($og_membership->is_new) || $save_created) {
     // Save the membership for update, or if the OG membership is new when
     // "save-created" is TRUE.
-    //$og_membership->save();
+    $og_membership->save();
   }
-  dpm($og_membership, 'og_membership');
 
   return $og_membership;
 }
@@ -968,7 +963,7 @@ function og_membership_load($name = NULL) {
  *   An array of group entities, indexed by group ID.
  */
 function og_membership_load_multiple($ids = array(), $conditions = array(), $reset = FALSE) {
-  return entity_load('og_membership', $ids, $conditions, $reset);
+  return entity_load_multiple('og_membership', $ids, $conditions, $reset);
 }
 
 /**
@@ -1076,7 +1071,7 @@ function og_get_entity_groups($entity_type = 'user', $entity = NULL, $states = a
 
   if (isset($cache[$entity_type][$id][$state_identifier])) {
     // Return cached values.
-    return $cache[$entity_type][$id][$state_identifier];
+    //return $cache[$entity_type][$id][$state_identifier];
   }
 
   $cache[$entity_type][$id][$state_identifier] = array();
@@ -1091,11 +1086,11 @@ function og_get_entity_groups($entity_type = 'user', $entity = NULL, $states = a
   }
 
   $result = $query->execute();
-  if (!empty($result['og_membership'])) {
+  if (!empty($result)) {
     // Get the group ID from the group membership.
-    $og_memberships = og_membership_load_multiple(array_keys($result['og_membership']));
+    $og_memberships = og_membership_load_multiple(array_keys($result));
     foreach ($og_memberships as $og_membership) {
-      $cache[$entity_type][$id][$state_identifier][$og_membership->group_type][$og_membership->id] = $og_membership->gid;
+      $cache[$entity_type][$id][$state_identifier][$og_membership->group_type()][$og_membership->id()] = $og_membership->gid();
     }
   }
 
@@ -1147,14 +1142,11 @@ function og_get_group_audience_fields($entity_type = 'user', $bundle_name = 'use
       continue;
     }
     foreach ($instances as $instance) {
-      dpm($instance->getFieldName());
       if (!og_is_group_audience_field($entity_type, $instance->getFieldName())) {
-        dpm('continue', $entity_type);
         continue;
       }
 
       $field_settings = $instance->getField()->getFieldSettings();
-      dpm($field_settings);
       if (isset($group_type) && $field_settings['target_type'] != $group_type) {
         continue;
       }
