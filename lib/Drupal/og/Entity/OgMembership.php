@@ -180,8 +180,6 @@ class OgMembership extends ContentEntityBase implements OgMembershipInterface {
   public function save() {
     $entity_type = $this->entity_type();
     $etid = $this->etid();
-    dpm($entity_type, 'entity_type');
-    dpm($etid, 'etid');
 
     if ($entity_type == 'user' && !$etid) {
       throw new OgException('OG membership can not be created for anonymous user.');
