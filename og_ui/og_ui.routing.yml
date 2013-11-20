@@ -26,3 +26,18 @@ og_ui.admin.group.fields.delete:
     _title: 'Delete'
   requirements:
     _permission: 'administer group'
+og_ui.admin.group.permissions:
+  path: 'admin/config/group/permissions'
+  defaults:
+    _controller: '\Drupal\og_ui\Controller\OgUiController::groupTypesOverview'
+    _title: 'OG permissions overview'
+    type: 'permissions'
+  requirements:
+    _permission: 'administer group'
+og_ui.admin.group.permissions.global:
+  path: 'admin/config/group/permissions/{entity_type}/{bundle_name}'
+  defaults:
+    _form: '\Drupal\og_ui\Form\AdminGlobalPermissionsForm'
+    rid: 0
+  requirements:
+    _og_ui_access_group_permissions: 'TRUE'

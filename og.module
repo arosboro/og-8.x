@@ -87,6 +87,40 @@ function og_permission() {
 }
 
 /**
+ * Implements hook_og_permission().
+ */
+function og_og_permission() {
+  // Generate standard node permissions for all applicable node types.
+  $perms = array();
+
+  $perms['update group'] = array(
+    'title' => t('Edit group'),
+    'description' => t('Edit the group. Note: This permission controls only node entity type groups.'),
+    'default role' => array(OG_ADMINISTRATOR_ROLE),
+  );
+  $perms['administer group'] = array(
+    'title' => t('Administer group'),
+    'description' => t('Manage group members and content in the group.'),
+    'default role' => array(OG_ADMINISTRATOR_ROLE),
+    'restrict access' => TRUE,
+  );
+
+  foreach (node_permissions_get_configured_types() as $type) {
+    $perms = array_merge($perms, og_list_permissions($type->type));
+  }
+
+  return $perms;
+}
+
+
+/**
+ * Implements hook_og_default_roles().
+ */
+function og_og_default_roles() {
+  return array(OG_ADMINISTRATOR_ROLE);
+}
+
+/**
  * Implements hook_menu().
  */
 function og_menu() {
@@ -410,9 +444,8 @@ function og_field_create_instance($entity) {
     return;
   }
 
-//   TODO og_roles_override
   // Create default roles per entity-type per bundle.
-//  og_roles_override($entity->entityType(), $entity->bundle(), 0);
+  og_roles_override($entity->entity_type, $entity->bundle, 0);
 
   // Check if we need to add a group audience on the user's entity.
   // We add a different field, so each field can be set differently.
@@ -469,11 +502,10 @@ function og_field_delete_instance($entity) {
   }
 
   // Get the per-bundle roles.
-  // TODO og_roles
-  /*roles = og_roles($entity->entityType(), $entity->bundle());
+  $roles = og_roles($entity->entityType(), $entity->bundle());
   foreach ($roles as $rid => $name) {
     og_role_delete($rid);
-  }*/
+  }
 }
 
 /**
@@ -501,23 +533,18 @@ function og_entity_insert(\Drupal\Core\Entity\EntityInterface $entity) {
     // Subscribe the group manager.
     og_group($entity_type, $id, array('entity' => $uid));
     // Assign roles to group manager.
-    // TODO assign roles
-    /*
-    $name = 'og_group_manager_default_rids_' . $entity_type . '_' . $bundle;
-    if ($rids = variable_get($name)) {
+    $name = 'group_manager_default_rids.' . $entity_type . '.' . $bundle;
+    if ($rids = \Drupal::Config('og.settings')->get($name)) {
       foreach ($rids as $rid) {
-        og_role_grant($entity_type, $id, $entity->uid, $rid);
+        og_role_grant($entity_type, $id, $entity->getAuthorId(), $rid);
       }
     }
-    */
   }
-  // TODO roles
-  /*
+
   if (!og_is_group_default_access($entity_type, $entity)) {
     // Override default roles.
     og_roles_override($entity_type, $bundle, $id);
   }
-  */
 }
 
 /**
@@ -537,16 +564,15 @@ function og_entity_update(\Drupal\Core\Entity\EntityInterface $entity) {
     og_group($entity_type, $id, array('entity' => $uid));
     // Assign roles to group manager.
     // TODO roles
-    /*$name = 'og_group_manager_default_rids_' . $entity_type . '_' . $bundle;
+    $name = 'og_group_manager_default_rids_' . $entity_type . '_' . $bundle;
     if ($rids = variable_get($name)) {
       foreach ($rids as $rid) {
         og_role_grant($entity_type, $id, $entity->uid, $rid);
       }
-    }*/
+    }
   }
   $original_entity = $entity->original;
-  // TODO OG_DEFAULT_ACCESS_FIELD
-  /*$property = OG_DEFAULT_ACCESS_FIELD;
+  $property = OG_DEFAULT_ACCESS_FIELD;
 
   if (!empty($entity->{$property}) && $entity->{$property} != $original_entity->{$property}) {
     if (!og_is_group_default_access($entity_type, $entity)) {
@@ -557,7 +583,7 @@ function og_entity_update(\Drupal\Core\Entity\EntityInterface $entity) {
       // Delete overridden roles.
       og_delete_user_roles_by_group($entity_type, $entity);
     }
-  }*/
+  }
 }
 
 /**
@@ -876,6 +902,110 @@ function og_group($group_type, $gid, $values = array(), $save_created = TRUE) {
   }
 
   return $og_membership;
+}
+
+/**
+ * Determine whether a user has a given privilege.
+ *
+ * All permission checks in OG should go through this function. This
+ * way, we guarantee consistent behavior, and ensure that the superuser
+ * and group administrators can perform all actions.
+ *
+ * @param $group_type
+ *   The entity type of the group.
+ * @param $gid
+ *   The entity ID of the group.
+ * @param $string
+ *   The permission, such as "administer group", being checked for.
+ * @param $account
+ *   (optional) The account to check. Defaults to the current user.
+ * @param $skip_alter
+ *   (optional) If TRUE then user access will not be sent to other modules
+ *   using drupal_alter(). This can be used by modules implementing
+ *   hook_og_user_access_alter() that still want to use og_user_access(), but
+ *   without causing a recursion. Defaults to FALSE.
+ * @param $ignore_admin
+ *   (optional) When TRUE the specific permission is checked, ignoring the
+ *   "administer group" permission if the user has it. When FALSE, a user
+ *   with "administer group" will be granted all permissions.
+ *   Defaults to FALSE.
+ *
+ * @return boolean
+ *   TRUE or FALSE if the current user has the requested permission.
+ *   NULL, if the given group isn't a valid group.
+ */
+function og_user_access($group_type, $gid, $string, \Drupal\Core\Session\AccountInterface $account = NULL, $skip_alter = FALSE, $ignore_admin = FALSE) {
+  global $user;
+  $perm = &drupal_static(__FUNCTION__, array());
+  // Mark the group ID and permissions that invoked an alter.
+  $perm_alter = &drupal_static(__FUNCTION__ . '_alter', array());
+
+  if (!og_is_group($group_type, $gid)) {
+    // Not a group.
+    return NULL;
+  }
+
+
+  if (empty($account)) {
+    $account = clone $user;
+  }
+
+  // User #1 has all privileges.
+  if ($account->id() == 1) {
+    return TRUE;
+  }
+
+  // Administer group permission.
+  if ($account->hasPermission('administer group', $account) && !$ignore_admin) {
+    return TRUE;
+  }
+
+  // Group manager has all privileges (if variable is TRUE).
+  $uid = $account->id();
+  if (!empty($uid) && \Drupal::config('og.settings')->get('group_manager_full_access')) {
+    $group = entity_load($group_type, $gid);
+    $group_uid = $group_type == 'node' ? $group->getAuthorId() : $group_type == 'user' ? $group->id() : 0;
+    if (!empty($group_uid) && $group_uid == $uid) {
+      return TRUE;
+    }
+  }
+
+  $identifier = $group_type . ':' . $gid;
+
+  // To reduce the number of SQL queries, we cache the user's permissions
+  // in a static variable.
+  if (!isset($perm[$identifier][$uid])) {
+    $roles = og_get_user_roles($group_type, $gid, $uid);
+    $role_permissions = og_role_permissions($roles);
+
+    $perms = array();
+    foreach ($role_permissions as $one_role) {
+      $perms += $one_role;
+    }
+    $perm[$identifier][$uid] = $perms;
+  }
+
+  if (!$skip_alter && empty($perm_alter[$identifier][$uid][$string])) {
+    // Let modules alter the permissions. since $perm is static we create
+    // a clone of it.
+    $group = !empty($group) ? $group : entity_load($group_type, $gid);
+    $temp_perm = $perm[$identifier][$uid];
+    $context = array(
+      'string' => $string,
+      'group_type' => $group_type,
+      'group' => $group,
+      'account' => $account,
+    );
+    \Drupal::moduleHandler()->alter('og_user_access', $temp_perm, $context);
+
+    // Re-assessing the altered permissions.
+    $perm[$identifier][$uid] = $temp_perm;
+
+    // Make sure alter isn't called for the same permissions.
+    $perm_alter[$identifier][$uid][$string] = TRUE;
+  }
+
+  return !empty($perm[$identifier][$uid][$string]) || (!empty($perm[$identifier][$uid]['administer group']) && !$ignore_admin);
 }
 
 /**
@@ -1306,6 +1436,660 @@ function og_is_member($group_type, $gid, $entity_type = 'user', $entity = NULL, 
 }
 
 /**
+ * Check if group should use default roles and permissions.
+ *
+ * @param $group_type
+ *   The entity type of the group.
+ * @param $gid
+ *   The group ID or the group entity.
+ *
+ * @return boolean
+ *   TRUE if group should use default roles and permissions.
+ */
+function og_is_group_default_access($group_type, $gid) {
+  $entity = entity_load($group_type, $gid);
+  $bundle = $entity->bundle();
+
+  if (!\Drupal\field\Field::fieldInfo()->getInstance($group_type, $bundle, OG_DEFAULT_ACCESS_FIELD)) {
+    $default = \Drupal::Config('og.settings')->get("is_group_default_access.{$group_type}.{$bundle}");
+    return  $default === FALSE ? $default : TRUE;
+  }
+
+  if (empty($entity->{OG_DEFAULT_ACCESS_FIELD})) {
+    return TRUE;
+  }
+
+  return !$entity->{OG_DEFAULT_ACCESS_FIELD}->value();
+}
+
+/**
+ * Retrieve an array of roles matching specified conditions.
+ *
+ * @param $group_type
+ *   The group type.
+ * @param $bundle
+ *   The bundle type.
+ * @param $gid
+ *   The group ID.
+ * @param $force_group
+ *   (optional) If TRUE then the roles of the group will be retrieved by the
+ *   group ID, even if the group is set to have default roles and permissions.
+ *   The group might be set to "Default access" but infact there are inactive
+ *   group roles. Thus, we are forcing the function to return the overriden
+ *   roles. see og_delete_user_roles_by_group().
+ * @param $include_all
+ *   (optional) If TRUE then the anonymous and authenticated default roles will
+ *   be included.
+ *
+ * @return
+ *   An associative array with the role id as the key and the role name as
+ *   value. The anonymous and authenticated default roles are on the top of the
+ *   array.
+ */
+function og_roles($group_type, $bundle, $gid = 0, $force_group = FALSE, $include_all = TRUE) {
+  if ($gid && !$bundle) {
+    $entity = entity_load($group_type, $gid);
+    $bundle = $entity->bundle();
+  }
+
+  // Check if overriden access exists.
+  if ($gid && !$force_group) {
+    $query_gid = og_is_group_default_access($group_type, $gid) ? 0 : $gid;
+  }
+  else {
+    $query_gid = $gid;
+  }
+
+  $query = db_select('og_role', 'ogr')
+      ->fields('ogr', array('rid', 'name'))
+      ->condition('group_type', $group_type, '=')
+      ->condition('group_bundle', $bundle, '=')
+      ->condition('gid', $query_gid, '=')
+      ->orderBy('rid', 'ASC');
+
+  if (!$include_all) {
+    $query->condition('name', array(OG_ANONYMOUS_ROLE, OG_AUTHENTICATED_ROLE), 'NOT IN');
+  }
+  $rids = $query
+      ->execute()
+      ->fetchAllkeyed();
+
+  return $rids;
+}
+
+/**
+ * Get array of default roles, keyed by their declaring module.
+ *
+ * @param $include
+ *   (optional) If TRUE also anonymous and authenticated roles will be returned.
+ *   Defaults to TRUE.
+ *
+ * @return array
+ *   Array of default roles, grouped by module name.
+ */
+function og_get_default_roles($include = TRUE) {
+  $roles = array();
+  foreach (\Drupal::moduleHandler()->getImplementations('og_default_roles') as $module) {
+    $roles = array_merge($roles, \Drupal::moduleHandler()->invoke($module, 'og_default_roles'));
+  }
+
+  // Allow other modules to alter the default roles, except of the anonymous and
+  // authenticated.
+  \Drupal::moduleHandler()->alter('og_default_roles', $roles);
+
+  if ($include) {
+    array_unshift($roles, OG_AUTHENTICATED_ROLE);
+    array_unshift($roles, OG_ANONYMOUS_ROLE);
+  }
+
+  return $roles;
+}
+
+/**
+ * Get all roles of a user in a certain group.
+ *
+ * @param $group_type
+ *   The entity type of the group.
+ * @param $gid
+ *   The group ID.
+ * @param $uid
+ *   (optional) Integer specifying the user ID. By default an ID of current
+ *   logged in user will be used.
+ * @param $include
+ *   (optional) If TRUE also anonymous or authenticated role ID will be
+ *   returned. Defaults to TRUE.
+ *
+ * @return
+ *   Array with the role IDs of the user as the key, and the role name as
+ *   the value.
+ */
+function og_get_user_roles($group_type, $gid, $uid = NULL, $include = TRUE) {
+  $roles = &drupal_static(__FUNCTION__, array());
+  if (empty($uid)) {
+    global $user;
+    $uid = $user->id();
+  }
+
+  $identifier = implode(':', array($group_type, $gid, $uid, $include));
+  if (isset($roles[$identifier])) {
+    return $roles[$identifier];
+  }
+
+  $group = entity_load($group_type, $gid);
+  // Get the bundle of the group.
+  $id = $group->id();
+  $bundle = $group->bundle();
+
+  // Check if roles are overridden for the group.
+  $query_gid = og_is_group_default_access($group_type, $gid) ? 0 : $gid;
+
+  $query = db_select('og_users_roles', 'ogur');
+  $query->innerJoin('og_role', 'ogr', 'ogur.rid = ogr.rid');
+
+  $rids = $query
+      ->fields('ogur', array('rid'))
+      ->fields('ogr', array('name'))
+      ->condition('ogr.group_type', $group_type, '=')
+      ->condition('ogr.group_bundle', $bundle, '=')
+      ->condition('ogr.gid', $query_gid, '=')
+      ->condition('ogur.uid', $uid, '=')
+      ->condition('ogur.gid', $gid, '=')
+      ->orderBy('rid')
+      ->execute()
+      ->fetchAllkeyed();
+
+  if ($include) {
+    $account = user_load($uid);
+    $role_name = og_is_member($group_type, $gid, 'user', $account) ? OG_AUTHENTICATED_ROLE : OG_ANONYMOUS_ROLE;
+
+    $rids = db_select('og_role', 'ogr')
+            ->fields('ogr', array('rid', 'name'))
+            ->condition('group_type', $group_type, '=')
+            ->condition('group_bundle', $bundle, '=')
+            ->condition('gid', $query_gid, '=')
+            ->condition('name', $role_name, '=')
+            ->execute()
+            ->fetchAllkeyed() + $rids;
+  }
+
+  $roles[$identifier] = $rids;
+  return $rids;
+}
+
+/**
+ * Create a stub OG role object.
+ *
+ * @param $name
+ *   A name of the role.
+ * @param $group_type
+ *   (optional) The entity type of the group.
+ * @param $gid
+ *   (optional) The group ID.
+ * @param $group_bundle
+ *   (optional) The bundle of the group.
+ *
+ * @return object
+ *   A stub OG role object.
+ */
+function og_role_create($name, $group_type = '', $gid = 0, $group_bundle = '') {
+  $role = new stdClass;
+  $role->name = $name;
+  $role->gid = $gid;
+  $role->group_type = $group_type;
+  $role->group_bundle = $group_bundle;
+  return $role;
+}
+
+/**
+ * Fetch a user role from database.
+ *
+ * @param $rid
+ *   An integer with the role ID.
+ *
+ * @return object
+ *   A fully-loaded role object if a role with the given ID exists,
+ *   FALSE otherwise.
+ */
+function og_role_load($rid) {
+  return db_select('og_role', 'r')
+      ->fields('r')
+      ->condition('rid', $rid)
+      ->execute()
+      ->fetchObject();
+}
+
+/**
+ * Save a user role to the database.
+ *
+ * @param $role
+ *   A role object to modify or add. If $role->rid is not specified, a new
+ *   role will be created.
+ *
+ * @return constant
+ *   Status constant indicating if role was created or updated.
+ *   Failure to write the user role record will return FALSE. Otherwise.
+ *   SAVED_NEW or SAVED_UPDATED is returned depending on the operation
+ *   performed.
+ */
+function og_role_save($role) {
+  if ($role->name) {
+    // Prevent leading and trailing spaces in role names.
+    $role->name = trim($role->name);
+  }
+  if (!empty($role->rid) && $role->name) {
+    $status = drupal_write_record('og_role', $role, 'rid');
+    \Drupal::ModuleHandler()->invokeAll('og_role_update', $role);
+  }
+  else {
+    $status = drupal_write_record('og_role', $role);
+    \Drupal::ModuleHandler()->invokeAll('og_role_insert', $role);
+  }
+
+  og_invalidate_cache();
+  return $status;
+}
+
+/**
+ * Delete a user role from database.
+ *
+ * @param $rid
+ *   An integer with the role ID.
+ */
+function og_role_delete($rid) {
+  $role = og_role_load($rid);
+
+  db_delete('og_role')
+      ->condition('rid', $rid)
+      ->execute();
+  db_delete('og_role_permission')
+      ->condition('rid', $rid)
+      ->execute();
+  // Update the users who have this role set.
+  db_delete('og_users_roles')
+      ->condition('rid', $rid)
+      ->execute();
+
+  \Drupal::ModuleHandler()->invokeAll('og_role_delete', $role);
+
+  og_invalidate_cache();
+}
+
+/**
+ * Delete all roles belonging to a group.
+ *
+ * @param $group_type
+ *   The group type.
+ * @param $gid
+ *   The group ID.
+ */
+function og_delete_user_roles_by_group($group_type, $gid) {
+  // Check if group has overridden roles defined.
+  $group = entity_load($group_type, $gid);
+  $gid = $group->id();
+  $bundle = $group->bundle();
+  if ($roles = og_roles($group_type, $bundle, $gid, TRUE)) {
+    foreach ($roles as $rid => $name) {
+      og_role_delete($rid);
+    }
+  }
+}
+
+/**
+ * Get the role names of role IDs.
+ *
+ * @param $rids
+ *   Array with role IDs.
+ * @return
+ *  Array keyed by the role ID, and the role name as the value.
+ */
+function og_get_user_roles_name($rids = array()) {
+  if ($rids) {
+    $query = db_query("SELECT rid, name FROM {og_role} WHERE rid IN (:rids)", array(':rids' => $rids));
+  }
+  else {
+    $query = db_query("SELECT rid, name FROM {og_role}");
+  }
+  return $query->fetchAllKeyed();
+}
+
+
+/**
+ * Delete all permissions defined by a module.
+ *
+ * @see og_modules_uninstalled()
+ *
+ * @param $modules
+ *   Array with the module names.
+ */
+function og_permissions_delete_by_module($modules = array()) {
+  db_delete('og_role_permission')
+      ->condition('module', $modules, 'IN')
+      ->execute();
+}
+
+/**
+ * Create new roles, based on the default roles and permissions.
+ *
+ * @param $group_type
+ *   The group type.
+ * @param $bundle
+ *   The bundle type.
+ * @param $gid
+ *   The group ID.
+ *
+ * @return array|boolean
+ *   The newly created roles keyed by role ID and role name as the value. Or
+ *   FALSE if no roles were created.
+ */
+function og_roles_override($group_type, $bundle, $gid) {
+  // Check if roles aren't already overridden. We can't use
+  // og_is_group_default_access() as the field is already set, so we
+  // check to see if there are new roles in the database by setting
+  // "force group" parameter to TRUE.
+  if (og_roles($group_type, $bundle, $gid, TRUE)) {
+    return FALSE;
+  }
+
+  $rids = array();
+  if ($gid) {
+    // Copy roles from a specific group
+    $og_roles = og_roles($group_type, $bundle);
+    $perms = og_role_permissions($og_roles);
+  }
+  else {
+    // Copy the global default roles
+    $og_roles = og_get_default_roles();
+    $perms = og_get_default_permissions();
+  }
+
+  foreach ($og_roles as $rid => $name) {
+    $role = og_role_create($name, $group_type, $gid, $bundle);
+    og_role_save($role);
+
+    $rids[$role->rid] = $role->name;
+    og_role_change_permissions($role->rid, $perms[$rid]);
+
+    // Remap the default roles, to the newly created ones.
+    db_update('og_users_roles')
+        ->fields(array('rid' => $role->rid))
+        ->condition('rid', $rid)
+        ->condition('group_type', $group_type)
+        ->condition('gid', $gid)
+        ->execute();
+  }
+
+  return $rids;
+}
+
+/**
+ * Grant a group role to a user.
+ *
+ * @param $group_type
+ *   The entity type of the group.
+ * @param $gid
+ *   The group ID.
+ * @param $uid
+ *   The user ID.
+ * @param $rid
+ *   The role ID.
+ */
+function og_role_grant($group_type, $gid, $uid, $rid) {
+  // Make sure the role is valid.
+  $group = entity_load($group_type, $gid);
+  $bundle = $group->bundle();
+  $og_roles = og_roles($group_type, $bundle, $gid, FALSE, FALSE);
+  if (empty($og_roles[$rid])) {
+    // Role isn't valid.
+    return;
+  }
+
+  // Get the existing user roles.
+  $user_roles = og_get_user_roles($group_type, $gid, $uid);
+  if (empty($user_roles[$rid])) {
+    $role = new stdClass();
+    $role->uid = $uid;
+    $role->rid = $rid;
+    $role->group_type = $group_type;
+    $role->gid = $gid;
+
+    drupal_write_record('og_users_roles', $role);
+    og_invalidate_cache();
+    \Drupal::ModuleHandler()->invokeAll('og_role_grant', $group_type, $gid, $uid, $rid);
+  }
+}
+
+/**
+ * Revoke a group role from a user.
+ *
+ * @param $group_type
+ *   The entity type of the group.
+ * @param $gid
+ *   The group ID.
+ * @param $uid
+ *   The user ID.
+ * @param $rid
+ *   The role ID.
+ */
+function og_role_revoke($group_type, $gid, $uid, $rid) {
+  $og_roles = og_get_user_roles($group_type, $gid, $uid);
+  if (!empty($og_roles[$rid])) {
+    db_delete('og_users_roles')
+        ->condition('uid', $uid)
+        ->condition('rid', $rid)
+        ->condition('group_type', $group_type)
+        ->condition('gid', $gid)
+        ->execute();
+    \Drupal::ModuleHandler()->invokeAll('og_role_revoke', $group_type, $gid, $uid, $rid);
+  }
+}
+
+/**
+ * Change permissions for a user role.
+ *
+ * This function may be used to grant and revoke multiple permissions at once.
+ * For example, when a form exposes checkboxes to configure permissions for a
+ * role, the submitted values may be directly passed on in a form submit
+ * handler.
+ *
+ * @param $rid
+ *   The ID of a group user role to alter.
+ * @param $permissions
+ *   An array of permissions, where the key holds the permission name and the
+ *   value is an integer or boolean that determines whether to grant or revoke
+ *   the permission:
+ *   @code
+ *     array(
+ *       'edit group' => 0,
+ *       'administer group' => 1,
+ *     )
+ *   @endcode
+ *   Existing permissions are not changed, unless specified in $permissions.
+ *
+ * @see og_role_grant_permissions()
+ * @see og_role_revoke_permissions()
+ */
+function og_role_change_permissions($rid, array $permissions = array()) {
+  // Grant new permissions for the role.
+  $grant = array_filter($permissions);
+  if (!empty($grant)) {
+    og_role_grant_permissions($rid, array_keys($grant));
+  }
+  // Revoke permissions for the role.
+  $revoke = array_diff_assoc($permissions, $grant);
+  if (!empty($revoke)) {
+    og_role_revoke_permissions($rid, array_keys($revoke));
+  }
+
+  if (!empty($grant) || !empty($revoke)) {
+    // Allow modules to be notified on permission changes.
+    $role = og_role_load($rid);
+    \Drupal::ModuleHandler()->invokeAll('og_role_change_permissions', $role, $grant, $revoke);
+  }
+}
+
+/**
+ * Grant permissions to a user role.
+ *
+ * @param $rid
+ *   The ID of a user role to alter.
+ * @param $permissions
+ *   A list of permission names to grant.
+ *
+ * @see user_role_change_permissions()
+ * @see user_role_revoke_permissions()
+ */
+function og_role_grant_permissions($rid, array $permissions = array()) {
+  $modules = array();
+  foreach (og_get_permissions() as $name => $value) {
+    $modules[$name] = $value['module'];
+  }
+  // Grant new permissions for the role.
+  foreach ($permissions as $name) {
+    // Prevent WSOD, if the permission name is wrong, and we can't find its
+    // module.
+    if (!empty($modules[$name])) {
+      db_merge('og_role_permission')
+          ->key(array(
+            'rid' => $rid,
+            'permission' => $name,
+            'module' => $modules[$name],
+          ))
+          ->execute();
+    }
+  }
+  og_invalidate_cache();
+}
+
+/**
+ * Revoke permissions from a user role.
+ *
+ * @param $rid
+ *   The ID of a user role to alter.
+ * @param $permissions
+ *   A list of permission names to revoke.
+ *
+ * @see user_role_change_permissions()
+ * @see user_role_grant_permissions()
+ */
+function og_role_revoke_permissions($rid, array $permissions = array()) {
+  // Revoke permissions for the role.
+  db_delete('og_role_permission')
+      ->condition('rid', $rid)
+      ->condition('permission', $permissions, 'IN')
+      ->execute();
+
+  og_invalidate_cache();
+}
+
+/**
+ * Get all permissions defined by implementing modules.
+ *
+ * @return array
+ *  Array keyed with the permissions name and the value of the permissions.
+ *  TODO: Write the values.
+ */
+function og_get_permissions() {
+  $perms = &drupal_static(__FUNCTION__, array());
+  if (!empty($perms)) {
+    return $perms;
+  }
+
+  foreach (\Drupal::moduleHandler()->getImplementations('og_permission') as $module) {
+    if ($permissions = \Drupal::moduleHandler()->invoke($module, 'og_permission')) {
+      foreach ($permissions as $key => $perm) {
+        $permissions[$key] += array(
+          // Initialize the roles key, if other modules haven't set it
+          // explicitly. This means the permissions can apply to anonymous and
+          // authenticated members as-well.
+          'roles' => array(OG_ANONYMOUS_ROLE, OG_AUTHENTICATED_ROLE),
+          'default role' => array(),
+          'module' => $module,
+        );
+      }
+      $perms = array_merge($perms, $permissions);
+    }
+  }
+
+  // Allow other modules to alter the permissions.
+  \Drupal::moduleHandler()->alter('og_permission', $perms);
+
+  return $perms;
+}
+
+/**
+ * Get default permissions.
+ *
+ * @return array
+ *   Array keyed with the anonymous, authenticated and administror and the
+ *   permissions that should be enabled by default.
+ */
+function og_get_default_permissions() {
+  $roles = og_get_default_roles();
+  $default_perms = og_get_permissions();
+  $perms = array();
+
+  foreach ($roles as $rid => $role_name) {
+    $perms[$rid] = array();
+    // For each default role, iterate default permissions and mark the
+    // permissions that set the role as default.
+    foreach ($default_perms as $perm_name => $perm) {
+      if (in_array($role_name, $perm['default role'])) {
+        $perms[$rid][$perm_name] = TRUE;
+      }
+    }
+  }
+
+  return $perms;
+}
+
+
+/**
+ * Determine the permissions for one or more roles.
+ *
+ * @param $roles
+ *   An array whose keys are the role IDs of interest.
+ *
+ * @return array
+ *   An array indexed by role ID. Each value is an array whose keys are the
+ *   permission strings for the given role ID.
+ */
+function og_role_permissions($roles = array()) {
+  $cache = &drupal_static(__FUNCTION__, array());
+
+  $role_permissions = $fetch = array();
+
+  if ($roles) {
+    foreach ($roles as $rid => $name) {
+      if (isset($cache[$rid])) {
+        $role_permissions[$rid] = $cache[$rid];
+      }
+      else {
+        // Add this rid to the list of those needing to be fetched.
+        $fetch[] = $rid;
+        // Prepare in case no permissions are returned.
+        $cache[$rid] = array();
+      }
+    }
+
+    if ($fetch) {
+      // Get from the database permissions that were not in the static variable.
+      // Only role IDs with at least one permission assigned will return rows.
+      $result = db_query("SELECT rid, permission FROM {og_role_permission} WHERE rid IN (:fetch)", array(':fetch' => $fetch));
+
+      foreach ($result as $row) {
+        $cache[$row->rid][$row->permission] = TRUE;
+      }
+      foreach ($fetch as $rid) {
+        // For every rid, we know we at least assigned an empty array.
+        $role_permissions[$rid] = $cache[$rid];
+      }
+    }
+  }
+
+  return $role_permissions;
+}
+
+/**
  * Get all the modules fields that can be assigned to fieldable entities.
  *
  * @param $field_name
@@ -1498,6 +2282,23 @@ function og_og_fields_info() {
 }
 
 /**
+ * Set breadcrumbs according to a given group.
+ *
+ * @param $entity_type
+ *   The entity type.
+ * @param $etid
+ *   The entity ID.
+ * @param $path
+ *   (optional) The path to append to the breadcrumb.
+ */
+function og_set_breadcrumb($entity_type, $etid, $path = array()) {
+  $entity = entity_load($entity_type, $etid);
+  $label = $entity->label();
+  $uri = $entity->uri();
+  \Drupal::service('breadcrumb')->build(array_merge(array(l(t('Home'), '<front>')), array(l($label, $uri['path'])), $path));
+}
+
+/**
  * Create an organic groups field in a bundle.
  *
  * @param $field_name
@@ -1576,4 +2377,55 @@ function og_group_content_states() {
     OG_STATE_PENDING => t('Pending'),
     OG_STATE_BLOCKED => t('Blocked'),
   );
+}
+
+/**
+ * Helper function to generate standard node permission list for a given type.
+ *
+ * @param $type
+ *   The machine-readable name of the node type.
+ *
+ * @return array
+ *   An array of permission names and descriptions.
+ */
+function og_list_permissions($type) {
+  $info = node_type_load($type);
+  $type = check_plain($info->type);
+  $perms = array();
+
+  // Check type is of group content.
+  if (og_is_group_content_type('node', $type)) {
+    // Build standard list of node permissions for this type.
+    $perms += array(
+      "create $type content" => array(
+        'title' => t('Create %type_name content', array('%type_name' => $info->name)),
+
+      ),
+      "update own $type content" => array(
+        'title' => t('Edit own %type_name content', array('%type_name' => $info->name)),
+      ),
+      "update any $type content" => array(
+        'title' => t('Edit any %type_name content', array('%type_name' => $info->name)),
+      ),
+      "delete own $type content" => array(
+        'title' => t('Delete own %type_name content', array('%type_name' => $info->name)),
+      ),
+      "delete any $type content" => array(
+        'title' => t('Delete any %type_name content', array('%type_name' => $info->name)),
+      ),
+    );
+
+    if (!\Drupal::moduleHandler()->moduleExists('entityreference_prepopulate')) {
+      // We allow the create permission only on members, as otherwise we would
+      // have to iterate over every single group to decide if the user has
+      // permissions for it.
+      $perms["create $type content"]['roles'] = array(OG_AUTHENTICATED_ROLE);
+    }
+
+    // Add default permissions.
+    foreach ($perms as $key => $value) {
+      $perms[$key]['default role'] = array(OG_AUTHENTICATED_ROLE);
+    }
+  }
+  return $perms;
 }

@@ -59,11 +59,11 @@ class AdminSettingsForm extends ConfigFormBase {
         '#type' => 'fieldset',
         '#title' => t('Group manager default roles'),
         '#description' => t('Select the role(s) a group manager will be granted upon creating a new group.'),
+        '#tree' => TRUE,
       );
-      /*
-      // TODO add group manager roles
+
       // Add group manager default roles.
-      $entity_info = Drupal::service('entity.manager')->getDefinitions();
+      $entity_info = \Drupal::service('entity.manager')->getDefinitions();
       foreach ($group_bundles as $entity_type => $bundles) {
         foreach ($bundles as $bundle_name => $bundle_label) {
           $og_roles = og_roles($entity_type, $bundle_name, 0, FALSE, FALSE);
@@ -76,17 +76,17 @@ class AdminSettingsForm extends ConfigFormBase {
             '@bundle-label' => $bundle_label,
           );
 
-          $name = 'og_group_manager_default_rids_' . $entity_type . '_' . $bundle_name;
+          $name = 'group_manager_default_rids.' . $entity_type . '.' . $bundle_name;
+          $default = \Drupal::Config('og.settings')->get($name);
           $form['og_group_manager_rids'][$name] = array(
             '#type' => 'select',
             '#title' => t('Roles in @entity-label - @bundle-label', $params),
             '#options' => $og_roles,
             '#multiple' => TRUE,
-            '#default_value' => variable_get($name, array()),
+            '#default_value' => $default ? $default : array(),
           );
         }
       }
-      */
     }
 
     // TODO Removed as Features are no longer required in Drupal 8
@@ -134,17 +134,21 @@ class AdminSettingsForm extends ConfigFormBase {
   public function submitForm(array &$form, array &$form_state) {
 
     // Get config factory
-    $config = $this->configFactory->get('bbb.settings');
+    $og_config = $this->configFactory->get('og.settings');
+    $og_ui_config = $this->configFactory->get('og_ui.settings');
 
     $form_values = $form_state['values'];
 
-    $config
-        ->set('security_salt', $form_values['bbb_server']['security_salt'])
-        ->set('base_url', $form_values['bbb_server']['base_url'])
-        ->set('display_mode', $form_values['bbb_client']['display_mode'])
-        ->set('display_height', $form_values['bbb_client']['display_height'])
-        ->set('display_width', $form_values['bbb_client']['display_width'])
-        ->save();
+    $og_config->set('group_manager_full_access', $form_values['og_group_manager_full_access']);
+    $og_config->set('node_access_strict', $form_values['og_node_access_strict']);
+    $og_ui_config->set('admin_people_view', $form_values['og_ui_admin_people_view']);
+
+    foreach ($form_values['og_group_manager_rids'] as $name => $value) {
+      $og_config->set($name, $value);
+    }
+
+    $og_config->set('use_queue', $form_values['og_use_queue']);
+    $og_config->set('orphans_delete', $form_values['og_orphans_delete']);
 
     parent::submitForm($form, $form_state);
   }

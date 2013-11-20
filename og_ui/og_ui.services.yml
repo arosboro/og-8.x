@@ -1,0 +1,6 @@
+services:
+  og_ui.group_permissions_access_check:
+    class: Drupal\og_ui\Access\OgUiGroupPermissionsAccessCheck
+    arguments: ['@current_user']
+    tags:
+      - { name: access_check }
